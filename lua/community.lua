@@ -15,4 +15,5 @@ return {
   { import = "astrocommunity.pack.yaml" },
   { import = "astrocommunity.pack.markdown" },
   { import = "astrocommunity.pack.docker" },
+  { import = "astrocommunity.pack.ps1" },
 }
