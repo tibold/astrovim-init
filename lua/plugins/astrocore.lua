@@ -3,6 +3,24 @@
 -- NOTE: We highly recommend setting up the Lua Language Server (`:LspInstall lua_ls`)
 --       as this provides autocomplete and documentation while editing
 
+local opt = { -- vim.opt.<key>
+  relativenumber = false, -- sets vim.opt.relativenumber
+  number = true, -- sets vim.opt.number
+  spell = false, -- sets vim.opt.spell
+  signcolumn = "yes", -- sets vim.opt.signcolumn to yes
+  wrap = false, -- sets vim.opt.wrap
+}
+
+if vim.fn.has "win32" == 1 then
+  opt.shell = vim.fn.executable "pwsh" == 1 and "pwsh" or "powershell"
+  opt.shellcmdflag =
+    "-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command [Console]::InputEncoding=[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$PSDefaultParameterValues['Out-File:Encoding']='utf8';"
+  opt.shellredir = "2>&1 | Out-File -Encoding UTF8 %s; exit $LastExitCode"
+  opt.shellpipe = "2>&1 | Out-File -Encoding UTF8 %s; exit $LastExitCode"
+  opt.shellquote = ""
+  opt.shellxquote = ""
+end
+
 ---@type LazySpec
 return {
   "AstroNvim/astrocore",
@@ -24,13 +42,7 @@ return {
     },
     -- vim options can be configured here
     options = {
-      opt = { -- vim.opt.<key>
-        relativenumber = false, -- sets vim.opt.relativenumber
-        number = true, -- sets vim.opt.number
-        spell = false, -- sets vim.opt.spell
-        signcolumn = "yes", -- sets vim.opt.signcolumn to yes
-        wrap = false, -- sets vim.opt.wrap
-      },
+      opt = opt,
       g = { -- vim.g.<key>
         -- configure global vim variables (vim.g)
         -- NOTE: `mapleader` and `maplocalleader` must be set in the AstroNvim opts or before `lazy.setup`
