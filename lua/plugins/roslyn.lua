@@ -1,4 +1,10 @@
 -- lua/plugins/roslyn.lua
+--
+-- Razor and CSHTML are served by roslyn.nvim's own co-hosting support, which
+-- supersedes rzls.nvim. Neither the `rzls` plugin nor the `rzls` Mason package
+-- may be installed alongside it, and no razor specific command arguments are
+-- needed. Co-hosting requires Neovim 0.12 and a roslyn language server from
+-- 5.8.0-1.26262.10 onwards.
 return {
   {
     "mason-org/mason.nvim",
@@ -21,8 +27,12 @@ return {
       require("roslyn").setup(opts)
 
       vim.lsp.config("roslyn", {
+        -- Only the extra arguments are stated here. The executable itself comes
+        -- from roslyn.nvim's own resolver, which appends the `.cmd` extension
+        -- the Mason shim carries on Windows; a hand written path without it
+        -- names a file that does not exist and the server never starts.
         cmd = {
-          vim.fn.stdpath "data" .. "/mason/bin/roslyn-language-server",
+          require("roslyn.utils").get_roslyn_lsp_path(),
           "--stdio",
           "--logLevel",
           "Warning",
