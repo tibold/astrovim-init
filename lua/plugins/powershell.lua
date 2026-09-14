@@ -1,39 +1,27 @@
 -- lua/plugins/powershell.lua
 --
--- nvim-lspconfig now ships lsp/powershell_es.lua, which builds the
--- Start-EditorServices command itself and reads `bundle_path` off the config. So
--- all that is left to supply is where the bundle lives -- Mason's package
--- directory -- and the formatting preference. The hand-built `cmd`, `filetypes`
--- and `root_markers` this file used to carry are all upstream now.
+-- astrocommunity.pack.ps1 installs powershell-editor-services through
+-- mason-lspconfig, which enables `powershell_es` and supplies its `bundle_path`
+-- from its own shim, while nvim-lspconfig's `lsp/powershell_es.lua` builds the
+-- Start-EditorServices command. Only the formatting preference is left to state.
 --
--- Under AstroNvim 5 this file also had to carry
--- `{ "neovim/nvim-lspconfig", version = false }`, because v5 pinned lspconfig to
--- `~2.1` and the fix landed later. AstroNvim 6 pins `^2`, which resolves to
--- v2.11.0 and includes it, so the unpin is gone.
---
--- The enable below stays. astrocommunity.pack.ps1 adds powershell_es to
--- mason-lspconfig's ensure_installed, and that installs the package and nothing
--- more. Measured -- on a ps1 buffer, vim.lsp.is_enabled("powershell_es") was
--- false and no client attached -- so it is not legacy, and dropping it leaves
--- the server installed and never started.
+-- Registering the server from a plugin `init` instead, as this file used to, ran
+-- before nvim-lspconfig was on the runtimepath. The base config carrying `cmd`
+-- was therefore not found, and the server failed to start with
+-- "cmd: expected function or table with executable command, got nil".
 return {
-  {
-    "AstroNvim/astrolsp",
-    optional = true,
-    -- init rather than opts: nothing here needs astrolsp loaded, and opts runs
-    -- only once it does, which can be after the FileType event of a file opened
-    -- on the command line -- by which point the server config is wanted.
-    init = function()
-      vim.lsp.config("powershell_es", {
-        bundle_path = vim.fn.stdpath "data" .. "/mason/packages/powershell-editor-services",
+  "AstroNvim/astrolsp",
+  optional = true,
+  ---@type AstroLSPOpts
+  opts = {
+    config = {
+      powershell_es = {
         settings = {
           powershell = {
             codeFormatting = { preset = "OTBS" },
           },
         },
-      })
-
-      vim.lsp.enable "powershell_es"
-    end,
+      },
+    },
   },
 }
