@@ -16,4 +16,5 @@ return {
   { import = "astrocommunity.pack.markdown" },
   { import = "astrocommunity.pack.docker" },
   { import = "astrocommunity.pack.ps1" },
+  { import = "astrocommunity.pack.nushell" },
 }
