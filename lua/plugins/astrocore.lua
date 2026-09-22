@@ -49,6 +49,33 @@ return {
         -- This can be found in the `lua/lazy_setup.lua` file
       },
     },
+    autocmds = {
+      -- AstroNvim only opens the explorer when nvim is launched with a
+      -- directory. This covers the plain `nvim` and `nvim <file>` cases too.
+      neotree_autoopen = {
+        {
+          event = "VimEnter",
+          desc = "Open Neo-Tree as a persistent sidebar on startup, without taking focus",
+          callback = function()
+            -- Reading from a pipe means nvim is a filter, not an editor.
+            if vim.fn.argc() > 0 and vim.fn.argv(0) == "-" then return end
+
+            -- Launching on a directory is a request to browse it, so that case
+            -- takes the cursor; every other case leaves it where it was. The
+            -- `nvim .` tree lands in the same left position as this one thanks
+            -- to hijack_netrw_behavior = "open_default" in
+            -- lua/plugins/neo-tree.lua, so this is idempotent, not a second tree.
+            local action = "show"
+            if vim.fn.argc() > 0 then
+              local stats = vim.uv.fs_stat(vim.fn.argv(0) --[[@as string]])
+              if stats and stats.type == "directory" then action = "focus" end
+            end
+            -- Scheduled so the dashboard has laid out before the split appears.
+            vim.schedule(function() pcall(vim.cmd.Neotree, action) end)
+          end,
+        },
+      },
+    },
     -- Mappings can be configured through AstroCore as well.
     -- NOTE: keycodes follow the casing in the vimdocs. For example, `<Leader>` must be capitalized
     mappings = {
