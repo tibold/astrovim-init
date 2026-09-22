@@ -1,0 +1,11 @@
+{
+  "name": "tibold-nvim",
+  "owner": { "name": "Tibold Kandrai" },
+  "plugins": [
+    {
+      "name": "nvim",
+      "source": "./claude",
+      "description": "Drive a running Neovim from Claude Code: put code on the human's screen, read language server diagnostics without a build, and mirror your working plan into an editor checklist panel. Requires the nvim-mcp and nvim-checklist Neovim plugins from the same repository."
+    }
+  ]
+}

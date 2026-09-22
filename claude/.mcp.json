@@ -1,0 +1,7 @@
+{
+  "editor": {
+    "type": "stdio",
+    "command": "nvim",
+    "args": ["-u", "NONE", "-l", "${CLAUDE_PLUGIN_ROOT}/server.lua"]
+  }
+}

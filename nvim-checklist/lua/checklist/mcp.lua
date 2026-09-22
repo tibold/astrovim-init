@@ -1,6 +1,6 @@
 --- Registers the checklist as a tool on the generic Neovim MCP server.
 ---
---- Claude reaches it as mcp__plugin_nvim_nvim__nvim (action checklist_update). That namespace matters:
+--- Claude reaches it as mcp__plugin_nvim_editor__drive (action checklist_update). That namespace matters:
 --- Claude Code drops every mcp__ide__* tool that is not on a two-item
 --- allowlist, so registering with claudecode.nvim -- the obvious-looking route
 --- -- advertises a tool the model can never call.

@@ -1,0 +1,6 @@
+{
+  "name": "nvim",
+  "version": "0.1.0",
+  "description": "Drive a running Neovim from Claude Code, and mirror your working plan into its checklist panel.",
+  "author": { "name": "Tibold Kandrai" }
+}

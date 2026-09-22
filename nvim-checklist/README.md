@@ -132,13 +132,14 @@ There is no contract to install. `lua/checklist/mcp.lua` registers a tool with
 [`nvim-mcp`](../nvim-mcp), and the tool's **description is** the contract — Claude
 receives the rules with the tool itself, so they cannot drift apart.
 
-Claude reaches it as `mcp__plugin_nvim_nvim__nvim (action checklist_update)`. The namespace is load-bearing:
+Claude reaches it as `mcp__plugin_nvim_editor__drive (action checklist_update)`. The namespace is load-bearing:
 registering with `claudecode.nvim` instead produces `mcp__ide__checklist_update`, which
 Claude Code drops against a hardcoded two-item allowlist. See the nvim-mcp README.
 
-Because the server is sideloaded onto the Claude that `claudecode.nvim` launches, the
-tool exists only inside Neovim. A `claude` started from a plain terminal does not see it;
-`load(path)` over `$NVIM` remains for that case.
+The server reaches Claude through the Claude Code plugin in `../claude`, registered once
+with `claude plugin marketplace add`. That is a user-scope install, so the tool is present
+in any session, not only ones started from inside Neovim — when no editor is reachable the
+action simply reports as much. `load(path)` over `$NVIM` remains as a Lua-side entry point.
 
 Unlike a shell wrapper, a malformed call **raises** rather than failing silently. The
 wrapper's silence covered "no editor running"; over a live tool that cannot happen, so
@@ -153,5 +154,5 @@ nvim --headless -u tests/minimal_init.lua \
   -c "PlenaryBustedDirectory tests/ { minimal_init = 'tests/minimal_init.lua' }"
 ```
 
-73 tests across state, render, window, load, startup, persistence and the MCP tool. The
-suite exits non-zero on failure. `nvim-mcp` carries its own 16.
+75 tests across state, render, window, load, startup, persistence and the MCP tool. The
+suite exits non-zero on failure. `nvim-mcp` carries its own 31.
