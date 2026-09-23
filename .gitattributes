@@ -1,0 +1,15 @@
+# Normalise every text file to LF, in the repository and in the working tree.
+#
+# `core.autocrlf` is true on the Windows machines this config is edited on,
+# which checks files out with CRLF. `.stylua.toml` sets `line_endings = "Unix"`,
+# so stylua then reports every Lua file as needing reformatting even when its
+# content is already correct -- a whole-file diff where every line is both
+# removed and added. That has twice sent a formatting run chasing a difference
+# that was only line endings.
+#
+# This config is also used on macOS and Linux, where CRLF is simply wrong, and
+# `claude/hooks/session-start.lua` and `claude/server.lua` are read by
+# `nvim -l`, which is fussier about them than the editor is.
+#
+# `text=auto` still lets git detect binary files and leave them alone.
+* text=auto eol=lf

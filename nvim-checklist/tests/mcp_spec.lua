@@ -80,7 +80,7 @@ describe("mcp tool", function()
     local hooks = vim.json.decode(read_repo_file "claude/hooks/hooks.json")
     local entry = hooks.hooks.SessionStart[1]
     assert.are.equal("startup|clear|compact", entry.matcher)
-    assert.is_true(entry.hooks[1].command:find("session%-start%.lua") ~= nil, entry.hooks[1].command)
+    assert.is_true(entry.hooks[1].command:find "session%-start%.lua" ~= nil, entry.hooks[1].command)
 
     local script = read_repo_file "claude/hooks/session-start.lua"
     -- Without the gate this would cost context in every session, including the
