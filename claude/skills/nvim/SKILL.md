@@ -1,6 +1,6 @@
 ---
 name: nvim
-description: Use when the human is working in Neovim and you want to show them code rather than describe it, open a file at a line while they keep typing, read language server diagnostics without running a build, choose between several editor instances, or mirror your working plan into their checklist panel. Covers the `drive` MCP tool's actions and when each is worth using.
+description: Use when the human is working in Neovim and you want to show them code rather than describe it, open a file at a line while they keep typing, read language server diagnostics without running a build, choose between several editor instances, or close a buffer. Covers the `drive` MCP tool's actions and when each is worth using. For the checklist panel, use the `checklist` skill instead.
 ---
 
 # Driving the human's Neovim
@@ -88,41 +88,9 @@ attachment information, so it cannot distinguish the empty cases.
 
 ## The checklist panel
 
-Claude Code's built-in todo display was removed because it bloated context. This
-replaces it outside the context window: the human sees your plan in a panel
-beside their code, and it costs you nothing to keep there.
-
-```json
-{ "action": "checklist_update", "args": { "ops": [
-  { "op": "set", "id": "nodes", "group": "RKE2", "text": "Provision nodes", "state": "done" },
-  { "op": "set", "id": "dns", "text": "DNS cutover", "state": "blocked", "note": "vendor TTL" }
-] } }
-```
-
-**Write-only.** The human reads it; you never read it back and never report on
-it. It is a courtesy display, not a source of truth. Reading it back would
-reintroduce exactly the context cost that removing the todo display was meant to
-avoid.
-
-Batch every change for a turn into **one** call.
-
-| op | effect |
-| --- | --- |
-| `set` | Upsert by `id`. Merges: send only the fields that changed |
-| `drop` | Remove one item by `id` |
-| `clear` | Empty it — use when starting a new task |
-| `sweep` | Drop completed items, keeping todo and blocked |
-
-- `id` is a stable slug you choose, matching `[a-z0-9_-]`. Re-`set`ting the same
-  id updates that item rather than creating a second one, which is what makes a
-  retried turn harmless.
-- `text` is required when the id is new; `state` defaults to `todo`.
-- `note` says what a blocker is waiting on, and nothing else.
-- `group` is a short workstream name, reused exactly across items.
-
-Ops apply in order and the whole array applies or none of it does, so a payload
-with one bad op changes nothing. Insertion order is meaningful: groups render in
-first-appearance order, not alphabetically.
+Mirroring your working plan into the panel beside their code is covered by the
+`checklist` skill, which carries the operation contract and the grouping rules.
+The action is `checklist_update`.
 
 ## Closing a buffer
 

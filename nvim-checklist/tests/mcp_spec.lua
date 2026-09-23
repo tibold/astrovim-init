@@ -36,17 +36,58 @@ describe("mcp tool", function()
     assert.is_true(description:find("never read it back", 1, true) ~= nil)
   end)
 
-  it("has the full contract in the nvim skill", function()
+  --- Read a file from the repository root, or fail the test naming the path.
+  local function read_repo_file(relative)
     local here = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h")
     local repo = vim.fn.fnamemodify(here, ":h:h")
-    local skill = repo .. "/claude/skills/nvim/SKILL.md"
-    assert.is_not_nil(vim.uv.fs_stat(skill), "skill missing at " .. skill)
-    local fd = assert(io.open(skill, "rb"))
+    local path = repo .. "/" .. relative
+    assert.is_not_nil(vim.uv.fs_stat(path), "missing at " .. path)
+    local fd = assert(io.open(path, "rb"))
     local text = fd:read "*a"
     fd:close()
-    for _, phrase in ipairs { "Write-only", "never read it back", "one", "sweep", "stable slug" } do
+    return text
+  end
+
+  it("has the full contract in the checklist skill", function()
+    local text = read_repo_file "claude/skills/checklist/SKILL.md"
+    for _, phrase in ipairs { "Write-only", "read it back", "sweep", "stable slug", "group" } do
       assert.is_true(text:find(phrase, 1, true) ~= nil, "skill is missing: " .. phrase)
     end
+  end)
+
+  it("tells both the skill and the hook to defer rather than drop", function()
+    -- A deferred item dropped is a decision lost: nothing else in the session
+    -- records that it was raised and consciously set aside. Asserted in both
+    -- places because the hook is what carries the habit into sessions where
+    -- the skill never loads.
+    for _, relative in ipairs { "claude/skills/checklist/SKILL.md", "claude/hooks/session-start.lua" } do
+      local text = read_repo_file(relative)
+      assert.is_true(text:find("Deferred", 1, true) ~= nil, relative .. " does not mention a Deferred group")
+      assert.is_true(text:find("drop", 1, true) ~= nil, relative .. " does not contrast deferring with dropping")
+    end
+  end)
+
+  it("keeps the contract out of the nvim skill, but reachable from it", function()
+    -- The checklist moved to its own skill so that it triggers on starting a
+    -- task rather than on wanting to drive the editor. Duplicating the ops
+    -- table back into the nvim skill would put the two out of step.
+    local text = read_repo_file "claude/skills/nvim/SKILL.md"
+    assert.is_true(text:find("`checklist` skill", 1, true) ~= nil, "nvim skill does not point at the checklist skill")
+    assert.is_nil(text:find("stable slug", 1, true), "nvim skill still carries the contract")
+  end)
+
+  it("injects the checklist habit at session start, only when in an editor", function()
+    local hooks = vim.json.decode(read_repo_file "claude/hooks/hooks.json")
+    local entry = hooks.hooks.SessionStart[1]
+    assert.are.equal("startup|clear|compact", entry.matcher)
+    assert.is_true(entry.hooks[1].command:find("session%-start%.lua") ~= nil, entry.hooks[1].command)
+
+    local script = read_repo_file "claude/hooks/session-start.lua"
+    -- Without the gate this would cost context in every session, including the
+    -- ones with no Neovim to draw a panel in.
+    assert.is_true(script:find("vim.env.NVIM", 1, true) ~= nil, "hook is not gated on $NVIM")
+    -- `print` goes to stderr under `nvim -l`, so the payload would vanish.
+    assert.is_true(script:find("io.stdout:write", 1, true) ~= nil, "hook does not write to stdout")
   end)
 
   it("applies ops and renders", function()

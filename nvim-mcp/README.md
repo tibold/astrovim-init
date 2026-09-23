@@ -18,9 +18,11 @@ claude plugin marketplace add <this repo>
 claude plugin install nvim@tibold-nvim
 ```
 
-That writes under `~/.claude/plugins` — not into `~/.claude.json` — and delivers the
-`nvim` skill alongside the server. Installation is a one-off and belongs in a dotfiles
-repo; this repository only *delivers* the plugin.
+That writes under `~/.claude/plugins` — not into `~/.claude.json` — and delivers two
+skills alongside the server: `nvim` for driving the editor, and `checklist` for the panel.
+A `SessionStart` hook injects a short standing instruction to keep the checklist current,
+gated on `$NVIM` so it costs nothing in a session with no editor attached. Installation is
+a one-off and belongs in a dotfiles repo; this repository only *delivers* the plugin.
 
 `${CLAUDE_PLUGIN_ROOT}` resolves to this repository, not to a copy under
 `~/.claude/plugins`, so edits to `claude/server.lua` are live without reinstalling.
