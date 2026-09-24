@@ -174,3 +174,16 @@ nvim --headless -u tests/minimal_init.lua \
 search, the ported editor actions and config generation.
 The protocol itself is verified by driving the bridge with real JSON-RPC and by a real
 `claude` session, rather than mocked.
+
+Those run on Windows, so the unix half of `claude/server.lua` needs its own harness:
+
+```bash
+podman build -t nvim-mcp-test -f nvim-mcp/tests/integration/Containerfile .
+podman run --rm nvim-mcp-test
+MSYS_NO_PATHCONV=1 podman run --rm -e XDG_RUNTIME_DIR=/run/user/0 nvim-mcp-test
+```
+
+Both invocations matter, because Neovim's socket layout depends on whether
+`XDG_RUNTIME_DIR` is set. See `nvim-mcp/tests/integration/README.md`, which records
+the four discovery bugs this found — three of which meant `instances` had never
+worked on *either* platform.

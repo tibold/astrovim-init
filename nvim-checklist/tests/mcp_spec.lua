@@ -79,7 +79,12 @@ describe("mcp tool", function()
   it("injects the checklist habit at session start, only when in an editor", function()
     local hooks = vim.json.decode(read_repo_file "claude/hooks/hooks.json")
     local entry = hooks.hooks.SessionStart[1]
-    assert.are.equal("startup|clear|compact", entry.matcher)
+    -- All five sources, not the three superpowers matches. Omitting `resume`
+    -- means the hook never fires for anyone who restarts and picks a session
+    -- back up, which is the normal way a long session continues.
+    for _, source in ipairs { "startup", "resume", "clear", "compact", "fork" } do
+      assert.is_true(entry.matcher:find(source, 1, true) ~= nil, "matcher does not cover " .. source)
+    end
     assert.is_true(entry.hooks[1].command:find "session%-start%.lua" ~= nil, entry.hooks[1].command)
 
     local script = read_repo_file "claude/hooks/session-start.lua"

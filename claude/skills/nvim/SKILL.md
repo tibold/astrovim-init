@@ -27,9 +27,20 @@ Do this while talking, not instead of talking.
 
 ## Which instance
 
-`action: "instances"` lists every Neovim serving an RPC address on this machine,
-each with its working directory and open files, and marks the one hosting this
-session as `host: true`.
+`action: "instances"` returns `{ editors, headless_skipped }`. Each entry in
+`editors` carries its working directory and open files, and the one hosting this
+session is marked `host: true`.
+
+Only instances with a user interface are listed. A headless Neovim — a test
+runner, a leaked script, a job that outlived its shell — serves RPC and answers
+identically to an editor, but has no screen to put a file on, so offering it as
+a target is worse than omitting it. `headless_skipped` counts them, so an
+instance you expected to see going missing is explainable rather than a
+mystery. On a development machine they are often the majority.
+
+An instance running an older `nvim-mcp` reports no interface either way and is
+listed rather than skipped, which is the safe direction: an unknown is treated
+as possibly real.
 
 You rarely need it. Omitting `instance` targets the host, which is the right
 editor whenever Claude Code is running in one of its terminal buffers — the
@@ -79,6 +90,20 @@ A server does not attach the instant a file opens — Roslyn loads the solution
 first, which can take well over a minute from cold while reporting the file
 clean however broken it is. If your file appears in
 `unattached`, the answer is "not watched yet", not "fine".
+
+Rather than asking again and guessing, wait for it:
+
+```json
+{ "action": "diagnostics", "args": { "wait_for": "roslyn", "timeout": 120 } }
+```
+
+This polls until that server appears in `clients`, then answers. On expiry it
+answers anyway with `timed_out: true` and `waited_for`, so a clean-looking
+result always carries the fact that it is provisional — never silence. The wait
+happens in the bridge, not the editor: a loop inside Neovim would block the very
+session whose servers are being waited on. `timeout` defaults to 60 seconds and
+is capped at 300, because the MCP client has its own deadline and waiting past
+it turns a provisional answer into no answer at all.
 
 This is worth having because a build cannot always run. It is not a substitute
 for one: it sees open buffers, not the solution.

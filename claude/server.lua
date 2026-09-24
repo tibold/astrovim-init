@@ -12,6 +12,16 @@
 
 local PROTOCOL_VERSION = "2024-11-05"
 
+-- Polling for `wait_for`. The ceiling exists because an MCP client has its own
+-- request timeout: waiting past it turns a provisional answer into no answer.
+local POLL_MS = 250
+local MAX_WAIT = 300
+
+-- How long a single instance gets to answer during discovery, and this script's
+-- own path so it can re-invoke itself as a probe. See instances().
+local PROBE_MS = 2000
+local SELF = _G.arg and _G.arg[0]
+
 --- In `nvim -l`, print() goes to stderr. Every byte on stdout must be JSON-RPC
 --- or the stream is corrupt, so writes go through here and nowhere else.
 local function send(message)
@@ -50,34 +60,115 @@ local function editor(address, lua, call_args)
   return result
 end
 
+--- Probe mode: `nvim -u NONE -l server.lua <address>` writes that instance's
+--- identify payload and exits. instances() spawns one child per candidate so a
+--- wedged editor is killed by the child's timeout rather than blocking the
+--- sweep. Checked before the JSON-RPC loop at the bottom, which reads stdin and
+--- would otherwise wait forever for input that is never coming.
+if _G.arg and _G.arg[1] then
+  local info = editor(_G.arg[1], 'return require("nvim-mcp").invoke("identify", {})')
+  if info and info.ok and info.content and info.content[1] then
+    io.stdout:write(info.content[1].text)
+    os.exit(0)
+  end
+  os.exit(1)
+end
+
 --- Every Neovim serving an RPC address on this machine. Only useful when
 --- targeting a worktree other than the host, or when Claude was not started
 --- from inside an editor at all.
 local function instances()
   local paths = {}
   if vim.fn.has "win32" == 1 then
-    paths = vim.fn.glob([[\\.\pipe\*]], true, true)
+    -- Forward slashes, because the globber reads backslashes as escapes and
+    -- the literal [[\\.\pipe\*]] therefore matches nothing at all -- which is
+    -- what this action used to do on Windows.
+    --
+    -- Narrowed to `nvim.` rather than `nvim*` on purpose: the same namespace
+    -- carries each editor's own terminal job pipes, named nvim-term-in-<pid>-<n>
+    -- and nvim-term-out-<pid>-<n>. Those are live pipes that are not RPC
+    -- servers, so connecting to one blocks rather than failing. Server sockets
+    -- are always nvim.<pid>.<n>, and the dot is what separates them.
+    --
+    -- Entries come back in the \\.\pipe\ form, which is the same form $NVIM
+    -- takes, so the `host` comparison below matches without normalising.
+    paths = vim.fn.glob([[//./pipe/nvim.*]], true, true)
   else
-    for _, dir in ipairs { vim.env.XDG_RUNTIME_DIR, "/tmp" } do
-      if dir then vim.list_extend(paths, vim.fn.glob(dir .. "/nvim*/0", true, true)) end
+    -- Built up rather than written as a literal: `ipairs {a, b}` stops at the
+    -- first nil, so with XDG_RUNTIME_DIR unset -- the common case -- a literal
+    -- would silently never reach /tmp, and discovery would always come back
+    -- empty on Linux.
+    local dirs = {}
+    if vim.env.XDG_RUNTIME_DIR and vim.env.XDG_RUNTIME_DIR ~= "" then dirs[#dirs + 1] = vim.env.XDG_RUNTIME_DIR end
+    dirs[#dirs + 1] = "/tmp"
+
+    -- The layout differs by directory, which is the part that is easy to get
+    -- wrong. $XDG_RUNTIME_DIR is already private to the user, so Neovim puts
+    -- the socket straight into it; /tmp is world writable, so it first makes a
+    -- private nvim.<user>/<random>/ to hold it. All three shapes verified
+    -- against 0.11.7 in nvim-mcp/tests/integration.
+    local candidates = {}
+    for _, dir in ipairs(dirs) do
+      vim.list_extend(candidates, vim.fn.glob(dir .. "/nvim.*", true, true)) -- flat, 0.10+
+      vim.list_extend(candidates, vim.fn.glob(dir .. "/nvim*/*/nvim.*", true, true)) -- nested, 0.10+
+      vim.list_extend(candidates, vim.fn.glob(dir .. "/nvim*/0", true, true)) -- pre-0.10
+    end
+
+    -- The flat pattern also matches the private directory itself, and one
+    -- socket can match two patterns. Both are filtered here rather than paid
+    -- for as a failed connection attempt each.
+    local seen = {}
+    for _, path in ipairs(candidates) do
+      local stat = vim.uv.fs_stat(path)
+      if stat and stat.type == "socket" and not seen[path] then
+        seen[path] = true
+        paths[#paths + 1] = path
+      end
     end
   end
 
-  local found = {}
+  -- Probing runs in child processes, not inline. An editor can hold its socket
+  -- open while never servicing RPC -- a real state, hit on this machine -- and
+  -- `vim.rpcrequest` has no timeout. A uv timer cannot rescue it either, since
+  -- callbacks do not run while the main loop is blocked. One such editor would
+  -- hang discovery for every other one, and the MCP call would never return.
+  --
+  -- They are started together and waited on afterwards, so the whole sweep
+  -- costs one timeout rather than one per instance. Only Neovim with nvim-mcp
+  -- loaded answers; anything else on the namespace exits non-zero and is
+  -- skipped.
+  if not SELF then return {} end
+
+  local running = {}
   for _, address in ipairs(paths) do
-    -- Only Neovim answers nvim_exec_lua; anything else on the pipe namespace
-    -- simply fails to connect or fails the call, and is skipped.
-    local info = editor(address, 'return require("nvim-mcp").invoke("identify", {})')
-    if info and info.ok and info.content then
-      local ok, decoded = pcall(vim.json.decode, info.content[1].text)
-      found[#found + 1] = {
-        address = address,
-        host = address == vim.env.NVIM,
-        info = ok and decoded or nil,
-      }
+    running[#running + 1] = {
+      address = address,
+      proc = vim.system({ "nvim", "-u", "NONE", "-l", SELF, address }, { text = true, timeout = PROBE_MS }),
+    }
+  end
+
+  local found, headless = {}, 0
+  for _, job in ipairs(running) do
+    local result = job.proc:wait()
+    local ok, decoded = pcall(vim.json.decode, result.stdout or "")
+    if result.code == 0 and ok and type(decoded) == "table" then
+      -- Only instances with a UI. A headless Neovim answers identify exactly
+      -- like an editor but has no screen to put a file on, so offering it as a
+      -- target is worse than omitting it. Test runners and leaked scripts are
+      -- easily the majority on a development machine; they are counted rather
+      -- than silently dropped so an instance going missing is explainable.
+      if decoded.ui == false then
+        headless = headless + 1
+      else
+        found[#found + 1] = {
+          address = job.address,
+          host = job.address == vim.env.NVIM,
+          info = decoded,
+        }
+      end
     end
   end
-  return found
+  return { editors = found, headless_skipped = headless }
 end
 
 --- Actions the bridge answers itself, so they are listed even when the editor
@@ -95,7 +186,9 @@ local PREAMBLE = "Drive the human's running Neovim, and mirror your plan into it
 
 local EPILOGUE = [[Add `instance` (an address from `instances`) to target a different editor; omit
 it for the one hosting this session. `detail` shapes the reply: summary by
-default, full when a summary elides what you need.
+default, full when a summary elides what you need. `args.wait_for` holds until
+a named language server has attached, which matters because one that has not
+reports every file clean.
 
 This list comes from the editor's live registry and shows the commonly used
 actions only. Others exist and are callable but are not listed, because every
@@ -194,10 +287,43 @@ handlers["tools/call"] = function(id, params)
     return text(spec)
   end
 
-  local result, err = editor(address, 'return require("nvim-mcp").invoke(...)', { action, args, opts })
-  if not result then return fail(id, -32603, err or "Neovim is not reachable") end
-  if not result.ok then return fail(id, -32603, result.message or "Action failed") end
-  reply(id, { content = result.content or { { type = "text", text = "ok" } } })
+  -- Waiting belongs here rather than in the editor. A loop inside Neovim would
+  -- block the very session whose language servers are being waited on, so the
+  -- thing being waited for could never happen. Both keys are consumed here and
+  -- not forwarded, because the editor-side action knows nothing about them.
+  local wait_for = args.wait_for
+  local timeout = math.min(tonumber(args.timeout) or 60, MAX_WAIT)
+  args.wait_for, args.timeout = nil, nil
+
+  local deadline = os.time() + timeout
+  while true do
+    local result, err = editor(address, 'return require("nvim-mcp").invoke(...)', { action, args, opts })
+    if not result then return fail(id, -32603, err or "Neovim is not reachable") end
+    if not result.ok then return fail(id, -32603, result.message or "Action failed") end
+
+    local content = result.content or { { type = "text", text = "ok" } }
+    if not wait_for then return reply(id, { content = content }) end
+
+    -- An action's payload is JSON in its first text block. `clients` is what
+    -- diagnostics reports as attached, and is the only thing worth waiting on:
+    -- a server that has not attached reports every file clean, however broken.
+    local decoded_ok, decoded = pcall(vim.json.decode, content[1] and content[1].text or "")
+    local ready = decoded_ok and type(decoded) == "table" and vim.tbl_contains(decoded.clients or {}, wait_for)
+    if ready then return reply(id, { content = content }) end
+
+    if os.time() >= deadline then
+      -- Answer anyway, marked provisional. Returning nothing would be worse
+      -- than a clean-looking result the caller has been told to distrust.
+      if decoded_ok and type(decoded) == "table" then
+        decoded.timed_out = true
+        decoded.waited_for = wait_for
+        content = { { type = "text", text = vim.json.encode(decoded) } }
+      end
+      return reply(id, { content = content })
+    end
+
+    vim.uv.sleep(POLL_MS)
+  end
 end
 
 for line in io.lines() do

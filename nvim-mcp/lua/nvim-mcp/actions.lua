@@ -223,7 +223,16 @@ function M.identify()
       if name ~= "" then files[#files + 1] = name end
     end
   end
-  return { cwd = vim.fn.getcwd(), files = files, count = #files }
+  -- Whether anyone is actually looking at this one. A headless Neovim -- a test
+  -- runner, a leaked script, a job that outlived its shell -- serves RPC and
+  -- answers exactly like an editor, so without this the bridge cannot tell the
+  -- two apart and offers instances that can show a human nothing.
+  return {
+    cwd = vim.fn.getcwd(),
+    files = files,
+    count = #files,
+    ui = #vim.api.nvim_list_uis() > 0,
+  }
 end
 
 --- Register everything. Descriptions are one line each: the detail lives in the

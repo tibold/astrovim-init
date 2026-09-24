@@ -1,0 +1,25 @@
+# Proves the unix half of the bridge, which a Windows machine cannot exercise.
+# Build context is the repository root, because the image needs both nvim-mcp
+# and the bridge in claude/.
+#
+#   cd <repo>
+#   podman build -t nvim-mcp-test -f nvim-mcp/tests/integration/Containerfile .
+#   podman run --rm nvim-mcp-test
+#   podman run --rm -e XDG_RUNTIME_DIR=/run/user/0 nvim-mcp-test
+#
+# Run it both ways. Neovim puts its socket under $XDG_RUNTIME_DIR when that is
+# set and under /tmp when it is not, and server.lua globs both. Only one of
+# those paths is covered by a single run.
+#
+# Alpine keeps a current Neovim and the image stays small. `vim.uv` needs 0.10
+# or newer, so an older distro package fails outright rather than misleading.
+FROM docker.io/library/alpine:latest
+
+RUN apk add --no-cache neovim jq
+
+COPY nvim-mcp /src/nvim-mcp
+COPY claude /src/claude
+COPY nvim-mcp/tests/integration/init.lua /test/init.lua
+COPY nvim-mcp/tests/integration/probe.sh /test/probe.sh
+
+ENTRYPOINT ["sh", "/test/probe.sh"]
