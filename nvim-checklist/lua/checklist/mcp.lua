@@ -11,7 +11,7 @@ local M = {}
 --- instead of costing permanent context in a tool description.
 M.SUMMARY = "Mirror your working plan into the human's editor checklist panel. "
   .. "Write-only: never read it back. Batch a turn's changes into one call. "
-  .. "Ops: set (upsert by id), drop, clear, sweep."
+  .. "Group items by workstream. Ops: set (upsert by id), drop, clear, sweep."
 
 M.tool = {
   name = "checklist_update",
@@ -28,9 +28,14 @@ M.tool = {
             op = { type = "string", enum = { "set", "drop", "clear", "sweep" } },
             id = { type = "string" },
             text = { type = "string" },
-            state = { type = "string", enum = { "todo", "done", "blocked" } },
-            group = { type = "string" },
+            state = { type = "string", enum = { "todo", "inprogress", "done", "blocked" } },
+            group = { type = "string", description = "Workstream heading. Expected on all but one-off items." },
             note = { type = "string" },
+            index = {
+              type = "integer",
+              minimum = 1,
+              description = "1-based position. Places a new item, moves an existing one. Omit to append or leave in place.",
+            },
           },
           required = { "op" },
         },

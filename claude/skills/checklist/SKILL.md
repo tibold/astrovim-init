@@ -116,12 +116,47 @@ with one bad op changes nothing, so a retried turn is harmless.
 - **`note`** — a short qualifier, rendered on its own line beneath the item in
   the muted colour. Most often what a blocked item is waiting on. Not
   commentary, and not a place to continue the text.
-- **`group`** — a short workstream name.
+- **`group`** — a short workstream name. Expected on all but one-off items.
+- **`index`** — 1-based position over the whole list. Places a new item, moves
+  an existing one, clamped at both ends. Omit it to append or to leave an
+  existing item where it is.
+
+## Reshaping as the plan changes
+
+Position is set when an item is first mentioned. `set` appends a new id and
+leaves an existing one where it is, so a list grown one item at a time becomes a
+log of *when things came up* rather than a plan — early items cemented in the
+order they happened to arise, with later structure unable to reach them.
+
+Structure usually only becomes clear part-way through. When it does, move things:
+
+```json
+{ "op": "set", "id": "draft-pr", "group": "Delivery", "index": 7 }
+```
+
+`index` is 1-based, over the whole list rather than within a group. It places a
+new item and moves an existing one, and is clamped rather than rejected, so
+`1` means first and a large number means last. Since groups render in
+first-appearance order, moving an item also moves its group.
+
+For a wholesale reorganisation, `clear` followed by the full list in **one**
+call is safe: the whole payload applies or none of it does, so a malformed
+rebuild leaves the previous contents untouched. The risk is not atomicity but
+omission — `clear` discards everything, so every item must be re-sent with
+*all* of its fields. Leave `state` off one item and it silently reverts to
+`todo`. Prefer `index` for anything short of a full restructure.
+
+Reshape when the shape changes, not every turn. A panel that reorders under the
+human while they are reading it is worse than one that is merely append-ordered.
 
 ## Grouping
 
-Grouping is what makes the panel readable at a glance rather than a flat wall,
-so use it whenever more than one strand is in play.
+**Group by default.** An ungrouped item is for a genuine one-off that belongs to
+no workstream; if two or more items share a theme, they want a heading. A flat
+wall of twenty items is the failure this exists to prevent.
+
+Grouping is what makes the panel readable at a glance, so use it whenever more
+than one strand is in play.
 
 - Reuse the group string **exactly**. `"RKE2"` and `"rke2"` are two headings.
 - Name the workstream, not the phase: `"Ingress"`, `"Migrations"`, `"Docs"`

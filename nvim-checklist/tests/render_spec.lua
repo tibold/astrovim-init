@@ -131,6 +131,17 @@ describe("render", function()
     assert.is_true(out[2]:find("vendor TTL is 48h", 1, true) ~= nil)
   end)
 
+  it("renders no note line for an empty note restored from an old session", function()
+    -- state.lua clears these on the way in now, but a session file written
+    -- before that still holds one, and restore does not go back through
+    -- validation. Assigned directly here for exactly that reason.
+    state.apply_payload { ops = { set("a", { text = "Item" }), set("b", { text = "Next" }) } }
+    state.items.a.note = ""
+    render.render()
+    assert.are.equal(2, #lines())
+    assert.are.equal("b", render.line_to_id[2])
+  end)
+
   it("maps a note line to its own item, so the keymaps still reach it", function()
     state.apply_payload { ops = { set("a", { text = "Cut DNS over", note = "vendor TTL" }) } }
     render.render()

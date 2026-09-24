@@ -106,7 +106,11 @@ function M.build()
     -- note pushed the line past the panel width and the part that mattered --
     -- what a blocked item is waiting on -- was the part that fell off the end.
     -- The panel never wraps, so nothing off the right edge is readable at all.
-    if item.note then
+    -- `~= ""` as well as non-nil: state.lua now clears an empty note before it
+    -- gets here, but a session file written before that still carries one, and
+    -- an empty note renders as an indented blank line that reads as a gap in
+    -- the list rather than as nothing.
+    if item.note and item.note ~= "" then
       -- Indented past the icon so it hangs under the text it belongs to.
       lines[#lines + 1] = "      " .. item.note
       highlights[#highlights + 1] =

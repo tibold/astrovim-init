@@ -127,6 +127,86 @@ describe("state", function()
     assert.are.same(before, state.order)
   end)
 
+  it("trims a note and treats a whitespace-only one as absent", function()
+    -- An empty note used to reach the renderer and become a line of six spaces,
+    -- which reads as a gap in the list rather than as nothing at all.
+    state.apply_payload(
+      payload(
+        set("a", { text = "A", note = "  vendor TTL  " }),
+        set("b", { text = "B", note = "" }),
+        set("c", { text = "C", note = "   " })
+      )
+    )
+    assert.are.equal("vendor TTL", state.items.a.note)
+    assert.is_nil(state.items.b.note)
+    assert.is_nil(state.items.c.note)
+    assert_invariant()
+  end)
+
+  it("clears an existing note when set to whitespace", function()
+    state.apply_payload(payload(set("a", { text = "A", note = "waiting on vendor" })))
+    assert.are.equal("waiting on vendor", state.items.a.note)
+    state.apply_payload(payload(set("a", { note = "   " })))
+    assert.is_nil(state.items.a.note)
+    assert_invariant()
+  end)
+
+  it("treats a whitespace-only group as ungrouped", function()
+    -- Otherwise it renders as an empty heading with a blank line above it.
+    state.apply_payload(payload(set("a", { text = "A", group = "  " }), set("b", { text = "B", group = " G " })))
+    assert.is_nil(state.items.a.group)
+    assert.are.equal("G", state.items.b.group)
+    assert_invariant()
+  end)
+
+  it("trims text too, so the panel never shows a padded item", function()
+    state.apply_payload(payload(set("a", { text = "   Provision nodes   " })))
+    assert.are.equal("Provision nodes", state.items.a.text)
+    assert_invariant()
+  end)
+
+  it("places a new item at a 1-based index", function()
+    state.apply_payload(payload(set("a", { text = "A" }), set("b", { text = "B" })))
+    state.apply_payload(payload(set("c", { text = "C", index = 1 })))
+    assert.are.same({ "c", "a", "b" }, state.order)
+    assert_invariant()
+  end)
+
+  it("moves an existing item to an index", function()
+    -- The gap this closes: without it, position is frozen at first mention, so
+    -- a plan whose shape only emerged later could never be reshaped.
+    state.apply_payload(payload(set("a", { text = "A" }), set("b", { text = "B" }), set("c", { text = "C" })))
+    state.apply_payload(payload(set("c", { index = 1 })))
+    assert.are.same({ "c", "a", "b" }, state.order)
+    state.apply_payload(payload(set("c", { index = 2 })))
+    assert.are.same({ "a", "c", "b" }, state.order)
+    assert_invariant()
+  end)
+
+  it("clamps an index past the end instead of failing", function()
+    state.apply_payload(payload(set("a", { text = "A" }), set("b", { text = "B" })))
+    state.apply_payload(payload(set("a", { index = 99 })))
+    assert.are.same({ "b", "a" }, state.order)
+    assert_invariant()
+  end)
+
+  it("leaves position alone when no index is given", function()
+    state.apply_payload(payload(set("a", { text = "A" }), set("b", { text = "B" })))
+    state.apply_payload(payload(set("a", { text = "A updated", state = "done" })))
+    assert.are.same({ "a", "b" }, state.order)
+    assert_invariant()
+  end)
+
+  it("rejects an index that is not a positive whole number", function()
+    state.apply_payload(payload(set("a", { text = "A" })))
+    local before = vim.deepcopy(state.order)
+    assert.is_false((state.apply_payload(payload(set("a", { index = 0 })))))
+    assert.is_false((state.apply_payload(payload(set("a", { index = 1.5 })))))
+    assert.is_false((state.apply_payload(payload(set("a", { index = "1" })))))
+    assert.are.same(before, state.order)
+    assert_invariant()
+  end)
+
   it("empties everything on clear (criterion 8)", function()
     state.apply_payload(payload(set("a", { text = "A" }), set("b", { text = "B" })))
     state.apply_payload(payload { op = "clear" })
