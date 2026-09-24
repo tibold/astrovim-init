@@ -11,15 +11,23 @@ M.line_to_id = {}
 local ns = vim.api.nvim_create_namespace "checklist"
 
 local ICONS = {
-  nerd = { todo = "󰄱", done = "󰱒", blocked = "󰥔" },
-  ascii = { todo = "[ ]", done = "[x]", blocked = "[!]" },
+  -- `inprogress` is the half-filled box from the same checkbox family as the
+  -- other two, so the three read as one set rather than three unrelated glyphs.
+  nerd = { todo = "󰄱", inprogress = "󰡖", done = "󰱒", blocked = "󰥔" },
+  ascii = { todo = "[ ]", inprogress = "[~]", done = "[x]", blocked = "[!]" },
 }
 
-local HL_BY_STATE = { todo = "ChecklistTodo", done = "ChecklistDone", blocked = "ChecklistBlocked" }
+local HL_BY_STATE = {
+  todo = "ChecklistTodo",
+  inprogress = "ChecklistInprogress",
+  done = "ChecklistDone",
+  blocked = "ChecklistBlocked",
+}
 
 local LINKS = {
   ChecklistGroup = "Title",
   ChecklistTodo = "Normal",
+  ChecklistInprogress = "DiagnosticInfo",
   ChecklistDone = "DiagnosticOk",
   ChecklistBlocked = "DiagnosticWarn",
   ChecklistNote = "Comment",
@@ -84,24 +92,28 @@ function M.build()
     local icon = icons[item.state] or icons.todo
     local prefix = "    " .. icon .. " "
     local text = prefix .. item.text
-    local note_start
-    if item.note then
-      note_start = #text
-      text = text .. "  — " .. item.note
-    end
 
     lines[#lines + 1] = text
     local lnum = #lines - 1
     map[#lines] = id
 
-    highlights[#highlights + 1] =
-      { line = lnum, col_start = 0, col_end = note_start or #text, group = HL_BY_STATE[item.state] }
+    highlights[#highlights + 1] = { line = lnum, col_start = 0, col_end = #text, group = HL_BY_STATE[item.state] }
     if item.state == "done" then
-      highlights[#highlights + 1] =
-        { line = lnum, col_start = #prefix, col_end = note_start or #text, group = "ChecklistStrike" }
+      highlights[#highlights + 1] = { line = lnum, col_start = #prefix, col_end = #text, group = "ChecklistStrike" }
     end
-    if note_start then
-      highlights[#highlights + 1] = { line = lnum, col_start = note_start, col_end = #text, group = "ChecklistNote" }
+
+    -- The note goes on its own line rather than trailing the text. Appended, a
+    -- note pushed the line past the panel width and the part that mattered --
+    -- what a blocked item is waiting on -- was the part that fell off the end.
+    -- The panel never wraps, so nothing off the right edge is readable at all.
+    if item.note then
+      -- Indented past the icon so it hangs under the text it belongs to.
+      lines[#lines + 1] = "      " .. item.note
+      highlights[#highlights + 1] =
+        { line = #lines - 1, col_start = 0, col_end = #lines[#lines], group = "ChecklistNote" }
+      -- Mapped to the same item, so the toggle and drop keymaps act on the item
+      -- when the cursor happens to sit on its note.
+      map[#lines] = id
     end
   end
 

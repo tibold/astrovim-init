@@ -101,9 +101,13 @@ function M.clear()
   end)
 end
 
-function M.yank_markdown()
+--- The checklist as markdown. Pure, so it serves both the yank keymap and the
+--- SessionStart hook, which reads it over RPC to put the current plan back in
+--- front of an agent that has just been compacted.
+---@return string
+function M.markdown()
   local out, current = {}, nil
-  local marks = { todo = "- [ ] ", done = "- [x] ", blocked = "- [!] " }
+  local marks = { todo = "- [ ] ", inprogress = "- [>] ", done = "- [x] ", blocked = "- [!] " }
   for _, id in ipairs(state.order) do
     local item = state.items[id]
     if item.group ~= current then
@@ -113,10 +117,12 @@ function M.yank_markdown()
         out[#out + 1] = "## " .. current
       end
     end
-    out[#out + 1] = marks[item.state] .. item.text .. (item.note and ("  — " .. item.note) or "")
+    out[#out + 1] = (marks[item.state] or marks.todo) .. item.text .. (item.note and ("  — " .. item.note) or "")
   end
-  vim.fn.setreg("+", table.concat(out, "\n"))
+  return table.concat(out, "\n")
 end
+
+function M.yank_markdown() vim.fn.setreg("+", M.markdown()) end
 
 local function attach_keymaps(buf)
   local function map(lhs, fn, desc)

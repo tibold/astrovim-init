@@ -102,6 +102,31 @@ describe("state", function()
     assert_invariant()
   end)
 
+  it("accepts inprogress and keeps it through a sweep", function()
+    -- The one item being worked on right now is precisely what must not
+    -- disappear when the finished ones are cleared away.
+    state.apply_payload(
+      payload(
+        set("a", { text = "A", state = "done" }),
+        set("b", { text = "B", state = "inprogress" }),
+        set("c", { text = "C", state = "blocked" })
+      )
+    )
+    assert.are.equal("inprogress", state.items.b.state)
+    state.apply_payload(payload { op = "sweep" })
+    assert.are.same({ "b", "c" }, state.order)
+    assert_invariant()
+  end)
+
+  it("still rejects a state that is not one of the four", function()
+    -- Extra parentheses discard the message apply_payload returns alongside,
+    -- which is how the rejection tests above read too.
+    local before = vim.deepcopy(state.order)
+    assert.is_false((state.apply_payload(payload(set("x", { text = "X", state = "in-progress" })))))
+    assert.is_false((state.apply_payload(payload(set("x", { text = "X", state = "started" })))))
+    assert.are.same(before, state.order)
+  end)
+
   it("empties everything on clear (criterion 8)", function()
     state.apply_payload(payload(set("a", { text = "A" }), set("b", { text = "B" })))
     state.apply_payload(payload { op = "clear" })

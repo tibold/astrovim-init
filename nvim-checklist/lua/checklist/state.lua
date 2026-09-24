@@ -9,7 +9,10 @@ M.MAX_ITEMS = 200
 
 M.LIMITS = { text = 120, group = 60, note = 80 }
 local LIMITS = M.LIMITS
-local STATES = { todo = true, done = true, blocked = true }
+-- `sweep` drops only `done`, so `inprogress` survives it alongside `todo` and
+-- `blocked`. That is the point of the state: it marks the one thing being
+-- worked on right now, which is precisely what must not disappear mid-task.
+local STATES = { todo = true, inprogress = true, done = true, blocked = true }
 local KNOWN_OPS = { set = true, drop = true, clear = true, sweep = true }
 local SLUG = "^[a-z0-9_-]+$"
 

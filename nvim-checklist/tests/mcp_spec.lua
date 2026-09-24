@@ -88,6 +88,18 @@ describe("mcp tool", function()
     assert.is_true(entry.hooks[1].command:find "session%-start%.lua" ~= nil, entry.hooks[1].command)
 
     local script = read_repo_file "claude/hooks/session-start.lua"
+    -- Compaction is when the plan is lost and also when this fires, so the hook
+    -- hands the panel over rather than only pointing at it.
+    assert.is_true(script:find("window.markdown()", 1, true) ~= nil, "hook does not read the panel")
+
+    -- The address must reach the child as an argument. A vim.system child that
+    -- reads vim.env.NVIM itself and then issues an rpcrequest deadlocks: it
+    -- connects, and the reply never arrives. Passing the identical string as an
+    -- argument works, with the environment untouched. Asserted because the
+    -- obvious tidy-up -- "the child already has $NVIM, drop the argument" --
+    -- reintroduces a hang that only shows up at session start.
+    assert.is_true(script:find('"--checklist", vim.env.NVIM', 1, true) ~= nil, "address not passed to the child")
+    assert.is_true(script:find("_G.arg[2]", 1, true) ~= nil, "read mode does not take the address as an argument")
     -- Without the gate this would cost context in every session, including the
     -- ones with no Neovim to draw a panel in.
     assert.is_true(script:find("vim.env.NVIM", 1, true) ~= nil, "hook is not gated on $NVIM")

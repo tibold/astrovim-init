@@ -45,11 +45,18 @@ Then update at every point their understanding would otherwise go stale:
 | what happened | what to write |
 | --- | --- |
 | something is agreed and will be done | `set` it, `state: "todo"` |
-| you start on it | leave it `todo`; the panel is not a progress bar |
+| you start on it | `state: "inprogress"` |
 | it finishes | `state: "done"` |
 | it cannot proceed | `state: "blocked"` with a `note` saying what it waits on |
 | they put it off | move it to the `Deferred` group — see below |
 | it is genuinely abandoned | `drop` it |
+
+Mark things `done` as you finish them, not in one sweep at the end. A panel that
+only becomes accurate when the work is over was never worth writing to, and the
+human is reading it while you work, not afterwards.
+
+Keep at most one item `inprogress`. Its job is to answer "what is it doing right
+now", and two of them answer nothing.
 
 Batch everything for one turn into **one** call. Three calls in a turn is three
 redraws and three round trips for the same result.
@@ -72,11 +79,17 @@ sense in a week; "the thing we said we'd do later" does not.
 
 ## Write-only
 
-**Never read it back, and never report on it.** It is a courtesy display, not a
-source of truth — your own understanding is the source of truth. Reading it back
-would reintroduce exactly the context cost that removing the todo display was
-meant to avoid. Do not tell the human what their checklist says; they are
-looking at it.
+**Never read it back, and never report on it.** Do not tell the human what their
+checklist says; they are looking at it. Pulling it mid-conversation would
+reintroduce exactly the context cost that removing the todo display was meant to
+avoid.
+
+There is one exception, and it is not yours to make: the `SessionStart` hook
+hands you the panel's contents when a session starts, is cleared, or is
+compacted. That is a single bounded push at the moment the plan would otherwise
+be lost, rather than a habit of reading. When it arrives, treat it as your plan
+and carry on from it — it is what you wrote, coming back to you across the gap.
+Between those moments the panel is still write-only.
 
 ## Operations
 
@@ -98,8 +111,11 @@ with one bad op changes nothing, so a retried turn is harmless.
   survives being reordered or deferred.
 - **`text`** — required when the id is new. Written for someone who has not read
   your reasoning: "Provision nodes", not "do the thing we discussed".
-- **`state`** — `todo` (the default), `done`, or `blocked`.
-- **`note`** — only on a blocked item, saying what it waits on. Not commentary.
+- **`state`** — `todo` (the default), `inprogress`, `done`, or `blocked`.
+  `sweep` drops only `done`, so the other three survive it.
+- **`note`** — a short qualifier, rendered on its own line beneath the item in
+  the muted colour. Most often what a blocked item is waiting on. Not
+  commentary, and not a place to continue the text.
 - **`group`** — a short workstream name.
 
 ## Grouping

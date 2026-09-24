@@ -119,6 +119,54 @@ describe("render", function()
     assert.are_not.equal(old, new)
   end)
 
+  it("puts a note on its own line beneath the item", function()
+    -- Appended, a note pushed the line past the panel width, and the panel
+    -- never wraps, so what a blocked item was waiting on fell off the edge.
+    state.apply_payload { ops = { set("a", { text = "Cut DNS over", note = "vendor TTL is 48h" }) } }
+    render.render()
+    local out = lines()
+    assert.are.equal(2, #out)
+    assert.is_true(out[1]:find("Cut DNS over", 1, true) ~= nil)
+    assert.is_nil(out[1]:find("vendor TTL", 1, true), "note is still on the item line")
+    assert.is_true(out[2]:find("vendor TTL is 48h", 1, true) ~= nil)
+  end)
+
+  it("maps a note line to its own item, so the keymaps still reach it", function()
+    state.apply_payload { ops = { set("a", { text = "Cut DNS over", note = "vendor TTL" }) } }
+    render.render()
+    assert.are.equal("a", render.line_to_id[1])
+    assert.are.equal("a", render.line_to_id[2])
+  end)
+
+  it("gives the note line the muted highlight and nothing else", function()
+    state.apply_payload { ops = { set("a", { text = "Item", note = "why" }) } }
+    local _, highlights = render.build()
+    local on_note = vim.tbl_filter(function(h) return h.line == 1 end, highlights)
+    assert.are.equal(1, #on_note)
+    assert.are.equal("ChecklistNote", on_note[1].group)
+  end)
+
+  it("renders an inprogress item with its own icon and highlight", function()
+    state.apply_payload {
+      ops = {
+        set("a", { text = "Running", state = "inprogress" }),
+        set("b", { text = "Waiting" }),
+      },
+    }
+    local out, highlights = render.build()
+    assert.are_not.equal(out[1], out[2])
+    local first = vim.tbl_filter(function(h) return h.line == 0 end, highlights)[1]
+    assert.are.equal("ChecklistInprogress", first.group)
+  end)
+
+  it("does not strike through an inprogress item, only a done one", function()
+    state.apply_payload { ops = { set("a", { text = "Running", state = "inprogress" }) } }
+    local _, highlights = render.build()
+    for _, h in ipairs(highlights) do
+      assert.are_not.equal("ChecklistStrike", h.group)
+    end
+  end)
+
   it("produces identical lines for a repeated identical payload (criterion 3)", function()
     local p = { ops = { set("a", { text = "Task", group = "G", note = "n" }) } }
     state.apply_payload(p)

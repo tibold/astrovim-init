@@ -152,6 +152,24 @@ describe("window", function()
     assert.are.same({}, state.order)
   end)
 
+  it("builds markdown without touching the register, for the session hook", function()
+    -- The SessionStart hook reads this over RPC to hand a compacted agent its
+    -- own plan back, so it has to be callable without clobbering "+.
+    state.reset()
+    vim.fn.setreg("+", "untouched")
+    state.apply_payload {
+      ops = {
+        { op = "set", id = "a", text = "Running now", state = "inprogress" },
+        { op = "set", id = "b", text = "Stuck", state = "blocked", note = "vendor TTL" },
+      },
+    }
+    local md = window.markdown()
+    assert.is_true(md:find("- [>] Running now", 1, true) ~= nil, md)
+    assert.is_true(md:find("- [!] Stuck", 1, true) ~= nil, md)
+    assert.is_true(md:find("vendor TTL", 1, true) ~= nil, md)
+    assert.are.equal("untouched", vim.fn.getreg "+")
+  end)
+
   it("yanks the checklist as markdown", function()
     state.reset()
     state.apply_payload {
