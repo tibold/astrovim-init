@@ -11,6 +11,18 @@
           }
         ]
       }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt|permission_prompt|agent_needs_input|elicitation.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nvim -u NONE -l \"${CLAUDE_PLUGIN_ROOT}/hooks/notify.lua\"",
+            "async": false
+          }
+        ]
+      }
     ]
   }
 }
