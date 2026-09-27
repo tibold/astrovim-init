@@ -18,6 +18,17 @@ return {
   { import = "astrocommunity.pack.ps1" },
   { import = "astrocommunity.pack.nushell" },
 
+  -- rustaceanvim (rust-analyzer, clippy on save, codelldb debugging) plus
+  -- crates.nvim and the toml pack. rust-analyzer itself is not installed by
+  -- Mason here: it comes from `rustup component add rust-analyzer`, so it
+  -- always matches the toolchain. Local tweaks live in `lua/plugins/rust.lua`.
+  { import = "astrocommunity.pack.rust" },
+
+  -- Test runner UI under <Leader>T. Adapters come from the language packs;
+  -- the rust pack registers rustaceanvim's, which runs `cargo test` (or
+  -- nextest when installed) and can debug a test through codelldb.
+  { import = "astrocommunity.test.neotest" },
+
   -- Database client. Connections live in `lua/plugins/dadbod.lua`; note that
   -- dadbod drives the vendor CLI, so postgres needs `psql` and sqlite needs
   -- `sqlite3` on PATH. This pack adds the `:DBUI` lazy triggers and the
