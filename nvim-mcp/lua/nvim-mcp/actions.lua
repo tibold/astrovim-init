@@ -4,6 +4,7 @@
 --- is about code, put the code on the human's screen at the line under
 --- discussion rather than pasting an excerpt into chat.
 local mcp = require "nvim-mcp"
+local native = require("nvim-mcp.path").native
 
 local M = {}
 
@@ -33,7 +34,9 @@ function M.show(args)
 
   local entry = vim.api.nvim_get_current_win()
   local target
-  for _, window in ipairs(vim.api.nvim_list_wins()) do
+  -- This tab's windows only: nvim_list_wins spans every tab, and a file put
+  -- in a window of a tab the human is not looking at is not shown.
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if is_usable(window) then
       target = window
       break
@@ -50,8 +53,12 @@ function M.show(args)
 
   -- Addressing the buffer directly sidesteps command line parsing, and bufadd
   -- returns the existing buffer when the file is already open.
-  local buffer = vim.fn.bufadd(path)
+  local buffer = vim.fn.bufadd(native(path))
+  local fresh = not vim.api.nvim_buf_is_loaded(buffer)
   vim.fn.bufload(buffer)
+  -- FileType fires in bufload, so a language server may be on its way; the
+  -- LSP actions give it time to attach rather than report it missing.
+  if fresh then require("nvim-mcp.lsp.ready").loaded[buffer] = vim.uv.now() end
   vim.bo[buffer].buflisted = true
   vim.api.nvim_win_set_buf(target, buffer)
 
@@ -74,7 +81,7 @@ end
 --- ordinary one rather than the current one.
 function M.state()
   local file, cursor
-  for _, window in ipairs(vim.api.nvim_list_wins()) do
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if is_file_window(window) then
       file = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(window))
       local position = vim.api.nvim_win_get_cursor(window)
@@ -235,6 +242,81 @@ function M.identify()
   }
 end
 
+--- Open a directory as a project: a tab page whose working directory (:tcd)
+--- is that directory. Tools that find a project from the working directory --
+--- neotest's adapters, pickers, :make -- then treat it as its own project
+--- rather than as part of whatever the editor was started in.
+---
+--- The human's tab stays current unless `focus` is asked for: Claude's
+--- terminal lives in it, and switching would take the conversation off
+--- screen. A tab already on that directory is reused.
+function M.project(args)
+  local path = args.path
+  if type(path) ~= "string" or path == "" then error { code = -32602, message = "project needs a path" } end
+  local stat = vim.uv.fs_stat(path)
+  if not stat or stat.type ~= "directory" then error { code = -32602, message = "not a directory: " .. path } end
+  local wanted = vim.fs.normalize(vim.fn.fnamemodify(path, ":p")):gsub("/$", ""):lower()
+
+  local entry_tab, entry_win = vim.api.nvim_get_current_tabpage(), vim.api.nvim_get_current_win()
+  local number, created
+  for index = 1, vim.fn.tabpagenr "$" do
+    local cwd = vim.fs.normalize(vim.fn.getcwd(-1, index)):gsub("/$", ""):lower()
+    if cwd == wanted and vim.fn.haslocaldir(-1, index) == 1 then
+      number, created = index, false
+      break
+    end
+  end
+  if not number then
+    vim.cmd "$tabnew"
+    vim.cmd.tcd(vim.fn.fnameescape(native(path)))
+    number, created = vim.fn.tabpagenr(), true
+  end
+
+  local shown
+  if type(args.file) == "string" and args.file ~= "" then
+    local file = vim.fn.isabsolutepath(args.file) == 1 and args.file or vim.fs.joinpath(path, args.file)
+    local tab = vim.api.nvim_list_tabpages()[number]
+    local window = vim.api.nvim_tabpage_get_win(tab)
+    local buffer = vim.fn.bufadd(native(file))
+    local fresh = not vim.api.nvim_buf_is_loaded(buffer)
+    vim.fn.bufload(buffer)
+    if fresh then require("nvim-mcp.lsp.ready").loaded[buffer] = vim.uv.now() end
+    vim.bo[buffer].buflisted = true
+    vim.api.nvim_win_set_buf(window, buffer)
+    shown = vim.api.nvim_buf_get_name(buffer)
+  end
+
+  if args.focus then
+    vim.api.nvim_set_current_tabpage(vim.api.nvim_list_tabpages()[number])
+  elseif vim.api.nvim_tabpage_is_valid(entry_tab) then
+    vim.api.nvim_set_current_tabpage(entry_tab)
+    if vim.api.nvim_win_is_valid(entry_win) then vim.api.nvim_set_current_win(entry_win) end
+  end
+
+  return {
+    tab = number,
+    cwd = vim.fn.getcwd(-1, number),
+    created = created,
+    file = shown,
+    focus_kept = not args.focus and vim.api.nvim_get_current_win() == entry_win,
+  }
+end
+
+--- The project a file belongs to: the deepest tab directory (:tcd) that
+--- contains it, or nil. Used where a tool would otherwise take the current
+--- window's directory, which is Claude's tab rather than the project's.
+function M.project_root(file)
+  local wanted = vim.fs.normalize(file):lower()
+  local best
+  for index = 1, vim.fn.tabpagenr "$" do
+    if vim.fn.haslocaldir(-1, index) == 1 then
+      local cwd = vim.fs.normalize(vim.fn.getcwd(-1, index)):gsub("/$", "")
+      if vim.startswith(wanted, cwd:lower() .. "/") and (not best or #cwd > #best) then best = cwd end
+    end
+  end
+  return best
+end
+
 --- Register everything. Descriptions are one line each: the detail lives in the
 --- `nvim` skill, which loads on demand, rather than in permanent context.
 function M.setup()
@@ -259,6 +341,20 @@ function M.setup()
     description = "Language server findings, plus what is attached so an empty result can be read.",
     inputSchema = { type = "object", properties = vim.empty_dict() },
     handler = M.diagnostics,
+  }
+  mcp.register {
+    name = "project",
+    description = "Open a directory as a project in its own tab (:tcd), optionally with a file; focus stays put.",
+    inputSchema = {
+      type = "object",
+      properties = {
+        path = { type = "string", description = "The project directory." },
+        file = { type = "string", description = "A file to open there, relative to the project." },
+        focus = { type = "boolean", description = "Switch the human to the tab. Default false." },
+      },
+      required = { "path" },
+    },
+    handler = M.project,
   }
   mcp.register {
     name = "close",

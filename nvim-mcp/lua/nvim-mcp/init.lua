@@ -6,12 +6,22 @@
 --- register a tool at runtime and it appears without restarting either side.
 local M = {}
 
---- name -> { name, description, inputSchema, handler }
+--- "<tool>.<name>" -> { name, description, inputSchema, handler, tool, hidden }.
+--- Keyed by tool as well as name: `state` means the editor on `drive` and the
+--- debug session on `debug`, and with names alone one replaced the other.
 M.tools = {}
---- Registration order, so the tool list is stable rather than hash-ordered.
+--- Registration order of those keys, so the tool list is stable rather than
+--- hash-ordered.
 M.order = {}
 
 local NAME = "^[a-zA-Z][a-zA-Z0-9_]*$"
+
+--- The MCP tool an action is reached through when it names none. Which tools
+--- exist is the bridge's business (claude/server.lua), because a tool is what
+--- a Claude Code permission rule names; an action only says which one it is on.
+M.DEFAULT_TOOL = "drive"
+
+local function key(name, tool) return (tool or M.DEFAULT_TOOL) .. "." .. name end
 
 --- JSON objects with no members must encode as {} rather than []. Lua cannot
 --- tell the two apart, so anything meant to be an object is marked explicitly.
@@ -30,6 +40,9 @@ function M.register(tool)
     return false, ("tool %s needs a description"):format(tool.name)
   end
   if type(tool.handler) ~= "function" then return false, ("tool %s needs a handler"):format(tool.name) end
+  if tool.tool ~= nil and (type(tool.tool) ~= "string" or not tool.tool:match(NAME)) then
+    return false, ("tool %s has a tool that does not match %s"):format(tool.name, NAME)
+  end
 
   local schema = tool.inputSchema or { type = "object", properties = {} }
   if type(schema) ~= "table" then return false, ("tool %s has a non-table inputSchema"):format(tool.name) end
@@ -37,12 +50,17 @@ function M.register(tool)
   schema.type = schema.type or "object"
   schema.properties = as_object(schema.properties or {})
 
-  if not M.tools[tool.name] then M.order[#M.order + 1] = tool.name end
-  M.tools[tool.name] = {
+  local k = key(tool.name, tool.tool)
+  if not M.tools[k] then M.order[#M.order + 1] = k end
+  M.tools[k] = {
     name = tool.name,
     description = tool.description,
     inputSchema = schema,
     handler = tool.handler,
+    -- The MCP tool this action is called through. Actions that change files
+    -- sit on their own tool so a permission rule can tell them apart from
+    -- lookups; Claude Code matches MCP rules by tool name, never by argument.
+    tool = tool.tool or M.DEFAULT_TOOL,
     -- Hidden actions are reachable but not advertised. Every listed name costs
     -- permanent context in the dispatcher's description, so something used once
     -- a month is better found through `search` than carried all year.
@@ -51,11 +69,23 @@ function M.register(tool)
   return true
 end
 
-function M.unregister(name)
-  if not M.tools[name] then return false end
-  M.tools[name] = nil
+--- An action by name on a tool (drive when none is given).
+function M.get(name, tool) return M.tools[key(name, tool)] end
+
+--- An action by name on any tool, drive's first; nil when none has it.
+local function any(name)
+  if M.tools[key(name)] then return M.tools[key(name)] end
+  for _, k in ipairs(M.order) do
+    if M.tools[k].name == name then return M.tools[k] end
+  end
+end
+
+function M.unregister(name, tool)
+  local k = key(name, tool)
+  if not M.tools[k] then return false end
+  M.tools[k] = nil
   for i, n in ipairs(M.order) do
-    if n == name then
+    if n == k then
       table.remove(M.order, i)
       break
     end
@@ -67,9 +97,10 @@ end
 --- this crosses an RPC boundary and functions do not serialise.
 function M.specs()
   local out = {}
-  for _, name in ipairs(M.order) do
-    local tool = M.tools[name]
-    out[#out + 1] = { name = tool.name, description = tool.description, inputSchema = tool.inputSchema }
+  for _, k in ipairs(M.order) do
+    local tool = M.tools[k]
+    out[#out + 1] =
+      { name = tool.name, description = tool.description, tool = tool.tool, inputSchema = tool.inputSchema }
   end
   return out
 end
@@ -78,10 +109,26 @@ end
 --- Lua error here would surface to it as an opaque RPC failure.
 --- `opts` carries response shaping (currently `detail`), kept separate from the
 --- action's own arguments because it belongs to the reply, not the request.
+--- `via` is the MCP tool the call arrived through, and the action is looked up
+--- on it. One found only on another tool is refused rather than run:
+--- otherwise an edit could be reached through a tool whose permission rule only
+--- meant to allow lookups. In-editor callers name no tool and get drive's
+--- action, or any tool's when drive has none.
 --- Returns { ok = true, content = {...} } or { ok = false, message = "..." }.
-function M.invoke(name, args, opts)
-  local tool = M.tools[name]
-  if not tool then return { ok = false, message = "Unknown tool: " .. tostring(name) } end
+function M.invoke(name, args, opts, via)
+  local tool
+  if via then
+    tool = M.get(name, via)
+  else
+    tool = any(name)
+  end
+  if not tool then
+    local elsewhere = any(name)
+    if elsewhere then
+      return { ok = false, message = ("`%s` is on the `%s` tool, not `%s`"):format(name, elsewhere.tool, via) }
+    end
+    return { ok = false, message = "Unknown tool: " .. tostring(name) }
+  end
 
   local ok, result = pcall(tool.handler, args or {}, opts or {})
   if not ok then
@@ -101,29 +148,31 @@ function M.invoke(name, args, opts)
   return { ok = true, content = { { type = "text", text = "ok" } } }
 end
 
---- The names worth advertising: everything not registered as hidden.
+--- The names worth advertising: everything not registered as hidden, each with
+--- the tool it is on so the bridge can list it under that tool.
 function M.listed()
   local out = {}
-  for _, name in ipairs(M.order) do
-    local tool = M.tools[name]
-    if not tool.hidden then out[#out + 1] = { name = tool.name, description = tool.description } end
+  for _, k in ipairs(M.order) do
+    local tool = M.tools[k]
+    if not tool.hidden then out[#out + 1] = { name = tool.name, description = tool.description, tool = tool.tool } end
   end
   return out
 end
 
---- Full schema for one action, or a name-and-description roster of every action
---- including hidden ones. The roster deliberately omits schemas: with a long
---- tail, returning them all would cost more than the question is worth.
-function M.describe(name)
+--- Full schema for one action -- the given tool's, or any tool's when that one
+--- has none by the name -- or a name-and-description roster of every action,
+--- hidden ones included. The roster omits schemas: with a long tail, returning
+--- them all would cost more than the question is worth.
+function M.describe(name, on)
   if name then
-    local tool = M.tools[name]
+    local tool = (on and M.get(name, on)) or any(name)
     if not tool then return nil end
-    return { name = tool.name, description = tool.description, inputSchema = tool.inputSchema }
+    return { name = tool.name, description = tool.description, tool = tool.tool, inputSchema = tool.inputSchema }
   end
   local out = {}
   for _, key in ipairs(M.order) do
     local tool = M.tools[key]
-    out[#out + 1] = { name = tool.name, description = tool.description, hidden = tool.hidden or nil }
+    out[#out + 1] = { name = tool.name, description = tool.description, tool = tool.tool, hidden = tool.hidden or nil }
   end
   return out
 end
@@ -156,6 +205,7 @@ function M.search(query, limit)
         spec = {
           name = tool.name,
           description = tool.description,
+          tool = tool.tool,
           inputSchema = tool.inputSchema,
         },
       }
@@ -174,6 +224,11 @@ end
 function M.setup(opts)
   require("nvim-mcp.config").setup(opts)
   require("nvim-mcp.actions").setup()
+  require("nvim-mcp.quickfix").setup()
+  require("nvim-mcp.neotest").setup()
+  require("nvim-mcp.debug").setup()
+  require("nvim-mcp.eval").setup()
+  require("nvim-mcp.announce").setup()
   require("nvim-mcp.lsp").setup()
 end
 

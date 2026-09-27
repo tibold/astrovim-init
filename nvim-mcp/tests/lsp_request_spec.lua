@@ -1,6 +1,7 @@
 local request = require "nvim-mcp.lsp.request"
 local notice = require "nvim-mcp.lsp.notice"
 local position = require "nvim-mcp.lsp.position"
+local ready = require "nvim-mcp.lsp.ready"
 local fake = dofile(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h") .. "/fake_lsp.lua")
 
 local function with_server(opts)
@@ -36,9 +37,10 @@ describe("request.clients", function()
     assert.is_true(vim.uv.now() - started < 1000, "must not wait for a server that is not coming")
   end)
 
-  it("waits for a configured server that has not attached yet", function()
-    -- lua_ls decides its root asynchronously: right after a buffer loads, no
-    -- client is attached or even starting, yet one is on its way.
+  it("says not ready while a configured server has yet to attach to a buffer it just loaded", function()
+    -- lua_ls decides its root asynchronously, and rustaceanvim waits on cargo
+    -- metadata: right after a buffer loads, nothing is attached, yet one is
+    -- on its way. The bridge polls on not_ready; the editor does not wait.
     vim.filetype.add { extension = { latefake = "latefake" } }
     vim.lsp.config("late_fake", {
       filetypes = { "latefake" },
@@ -48,16 +50,20 @@ describe("request.clients", function()
       end,
     })
     vim.lsp.enable "late_fake"
-    local ok, found = pcall(function()
-      local buffer = position.buffer(fake.file({ "x" }, "a.latefake"))
-      return request.clients(buffer, HOVER, 3000)
-    end)
+    local buffer = position.buffer(fake.file({ "x" }, "a.latefake"))
+    local started = vim.uv.now()
+    local ok, err = pcall(request.clients, buffer, HOVER, 3000)
+    assert.is_false(ok)
+    assert.is_true(err.not_ready, vim.inspect(err))
+    assert.is_true(vim.uv.now() - started < 100, "the editor waited")
+
+    vim.wait(3000, function() return pcall(request.clients, buffer, HOVER, 3000) end, 20)
+    local found = request.clients(buffer, HOVER, 3000)
     vim.lsp.enable("late_fake", false)
-    assert.is_true(ok, tostring(type(found) == "table" and found.message or found))
     assert.are.equal("late_fake", found[1].name)
   end)
 
-  it("waits for a server that is attached but still starting", function()
+  it("says not ready while a server is attached but still starting", function()
     -- rustaceanvim starts rust-analyzer with vim.lsp.start, not a config.
     local path, dir = fake.file { "x" }
     local buffer = position.buffer(path)
@@ -66,11 +72,15 @@ describe("request.clients", function()
       root_dir = dir,
       cmd = fake.cmd { capabilities = { hoverProvider = true }, initialize_delay = 500 },
     }, { bufnr = buffer })
-    local found = request.clients(buffer, HOVER, 3000)
-    assert.are.equal("slow_start", found[1].name)
+    local ok, err = pcall(request.clients, buffer, HOVER, 3000)
+    assert.is_false(ok)
+    assert.are.same({ true, "slow_start", "starting" }, { err.not_ready, err.server, err.status })
+
+    vim.wait(3000, function() return pcall(request.clients, buffer, HOVER, 3000) end, 20)
+    assert.are.equal("slow_start", request.clients(buffer, HOVER, 3000)[1].name)
   end)
 
-  it("gives a configured server that never attaches only a short grace, with the notice up", function()
+  it("names a configured server that never attached once the wait is over", function()
     vim.filetype.add { extension = { neverfake = "neverfake" } }
     vim.lsp.config("never_fake", {
       filetypes = { "neverfake" },
@@ -79,19 +89,25 @@ describe("request.clients", function()
     })
     vim.lsp.enable "never_fake"
     local buffer = position.buffer(fake.file({ "x" }, "a.neverfake"))
-    local seen = false
-    local timer = vim.uv.new_timer()
-    timer:start(800, 0, vim.schedule_wrap(function()
-      seen = notice.active ~= nil and notice.active.shown ~= nil
-      timer:close()
-    end))
-    local started = vim.uv.now()
-    local ok, err = pcall(request.clients, buffer, HOVER, 10000)
+    assert.is_true(select(2, pcall(request.clients, buffer, HOVER, 1000)).not_ready)
+
+    ready.final = true
+    local ok, err = pcall(request.clients, buffer, HOVER, 1000)
+    ready.final = false
     vim.lsp.enable("never_fake", false)
     assert.is_false(ok)
+    assert.is_nil(err.not_ready)
     assert.matches("never_fake is configured", err.message)
-    assert.is_true(vim.uv.now() - started < request.GRACE_MS + 1000, "waited the full timeout")
-    assert.is_true(seen, "the editor waited without the notice")
+  end)
+
+  it("does not wait on a buffer the human already had open", function()
+    vim.filetype.add { extension = { neverfake = "neverfake" } }
+    vim.lsp.config("never_fake", { filetypes = { "neverfake" }, cmd = fake.cmd {}, root_dir = function() end })
+    local buffer = position.buffer(fake.file({ "x" }, "b.neverfake"))
+    ready.loaded[buffer] = nil
+    local ok, err = pcall(request.clients, buffer, HOVER, 1000)
+    assert.is_false(ok)
+    assert.is_nil(err.not_ready)
   end)
 
   it("names the servers when none supports the method", function()
@@ -141,11 +157,24 @@ describe("request.send", function()
   it("turns a server error into a readable one", function()
     local buffer, client = with_server {
       capabilities = { hoverProvider = true },
-      handlers = { [HOVER] = function() return fake.failure(-32801, "content modified") end },
+      handlers = { [HOVER] = function() return fake.failure(-32603, "index out of bounds") end },
     }
     local ok, err = pcall(request.send, client, HOVER, params(buffer), buffer, 1000)
     assert.is_false(ok)
     assert.are.equal(-32603, err.code)
+    assert.matches("fake: index out of bounds", err.message)
+  end)
+
+  it("passes content modified through as an error on the final attempt", function()
+    local buffer, client = with_server {
+      capabilities = { hoverProvider = true },
+      handlers = { [HOVER] = function() return fake.failure(-32801, "content modified") end },
+    }
+    ready.final = true
+    local ok, err = pcall(request.send, client, HOVER, params(buffer), buffer, 1000)
+    ready.final = false
+    assert.is_false(ok)
+    assert.is_nil(err.not_ready)
     assert.matches("fake: content modified", err.message)
   end)
 end)

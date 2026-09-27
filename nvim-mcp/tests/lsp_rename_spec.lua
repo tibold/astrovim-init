@@ -136,12 +136,13 @@ describe("format", function()
 end)
 
 describe("rename registration", function()
-  it("advertises rename and hides format", function()
+  it("puts every action that changes files on lsp_edit", function()
     mcp.tools, mcp.order = {}, {}
     lsp.setup()
-    local listed = vim.tbl_map(function(t) return t.name end, mcp.listed())
-    assert.is_true(vim.tbl_contains(listed, "rename"))
-    assert.is_false(vim.tbl_contains(listed, "format"))
-    assert.is_truthy(mcp.tools.format)
+    local on_edit = {}
+    for _, action in ipairs(mcp.listed()) do
+      if action.tool == "lsp_edit" then on_edit[#on_edit + 1] = action.name end
+    end
+    assert.are.same({ "rename", "format", "code_action" }, on_edit)
   end)
 end)

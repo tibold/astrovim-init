@@ -44,12 +44,12 @@ function M.buffer(path)
   local full = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
   if not vim.uv.fs_stat(full) then M.invalid("no such file: " .. full) end
 
-  local buffer = M.buffer_for(full) or vim.fn.bufadd(full)
+  local buffer = M.buffer_for(full) or vim.fn.bufadd(require("nvim-mcp.path").native(full))
   if not vim.api.nvim_buf_is_loaded(buffer) then
     vim.fn.bufload(buffer)
-    if vim.bo[buffer].filetype == "" then
-      vim.api.nvim_buf_call(buffer, function() vim.cmd "filetype detect" end)
-    end
+    -- FileType fires here, so a server may be on its way; see ready.
+    require("nvim-mcp.lsp.ready").loaded[buffer] = vim.uv.now()
+    if vim.bo[buffer].filetype == "" then vim.api.nvim_buf_call(buffer, function() vim.cmd "filetype detect" end) end
   else
     M.refresh(buffer)
   end
@@ -141,9 +141,7 @@ end
 --- A Range covering whole lines `first`..`last` (1-based, inclusive).
 function M.line_range(buffer, first, last, encoding)
   first, last = tonumber(first), tonumber(last)
-  if not first or not last or last < first then
-    M.invalid "line and end_line must be 1-based, with end_line >= line"
-  end
+  if not first or not last or last < first then M.invalid "line and end_line must be 1-based, with end_line >= line" end
   M.line_text(buffer, first)
   local last_text = M.line_text(buffer, last)
   return {

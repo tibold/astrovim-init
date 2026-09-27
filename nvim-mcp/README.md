@@ -1,7 +1,10 @@
 # nvim-mcp
 
 A generic MCP surface for this Neovim instance. Plugins register actions at runtime and
-Claude Code drives them through a single tool, `mcp__plugin_nvim_editor__drive`.
+Claude Code drives them through five tools: `drive` for the editor, `lsp` for
+language server lookups, `lsp_edit` for edits made through them, `debug` for
+the debugger, and `lua` for running Lua in the editor when no action reports
+what is needed.
 
 ## How it reaches Claude
 
@@ -51,7 +54,7 @@ Do not run both: two registrations of one server name collide. Note the `=` in
 `--mcp-config=<path>` — the flag takes a variable number of paths, so a space-separated
 value swallows the rest of the command line.
 
-## One advertised tool, not one per action
+## A few advertised tools, not one per action
 
 A tool definition costs roughly **600 tokens of permanent context**, measured with Claude
 Code's own `/context`. Six typed tools would be ~2,200 tokens in every session. One
@@ -98,6 +101,35 @@ its own tools: a few loaded, the rest behind a search.
 The advertised surface therefore stays flat as the long tail grows, and `describe` with no
 name returns the full roster — hidden actions included — for when you want to see
 everything at once.
+
+### Where a second tool is worth its cost
+
+Two things a dispatcher cannot do justify splitting it, and each split is by what the
+actions *are*, never one tool per action.
+
+**Permissions.** Claude Code matches an MCP permission rule on the tool name, never on its
+arguments. On one tool, allowing `hover` allows `rename`, which edits and saves files
+across the workspace without passing through Claude Code's own Edit. So lookups and edits
+sit on separate tools, `lsp` and `lsp_edit`, and a rule can allow one and still ask for
+the other.
+
+**The name is what gets read.** With tool search on, Claude Code defers MCP tools and shows
+only their names until one is loaded. Then the per-tool cost above mostly disappears, and
+`drive` says nothing about finding references. Claude Code's own `LSP` tool does, and it
+starts a cold second copy of every server. A tool called `lsp` next to it puts the right
+choice in view. The `SessionStart` hook adds a line saying so.
+
+An action names its tool when it registers, `drive` by default:
+
+```lua
+require("nvim-mcp").register { name = "rename", tool = "lsp_edit", ... }
+```
+
+Which tools exist is fixed in the bridge, since a tool is what a permission rule names and
+should change only with a plugin release; their action lists still come from the live
+registry. Calling an action through a tool it is not on is refused, so an edit cannot be
+reached through a tool allowed for lookups. `describe` and `search` report each action's
+tool.
 
 ### Why not claudecode.nvim's tool registry
 
@@ -159,18 +191,55 @@ The idea is borrowed from the telemetry MCP servers' `tools_call`, which pairs
 shape once the action list outgrows a description — call it 12-15 actions. Below
 that, inlining the names here costs about the same and saves a round trip on
 every first use.
+| `project` | Open a directory as a project in its own tab (`:tcd`), keeping the human's tab on screen |
 | `close` | Remove a buffer; refuses when it holds unsaved work |
 | `identify` | This instance's working directory and open files |
+| `quickfix` | The current quickfix list (or an older one), notes folded under their error |
+| `set_quickfix` | Hand the human a list of places as a new `Claude: …` list |
+| `tests` | The last neotest run: counts, and failures with file, line, errors, output |
+| `run_tests` | Run a file, the test at a line, an id, the suite or the last run in neotest; waits for results |
 
 These are ported from the `driving-neovim` skill's `drive.lua`, which reached the editor
 through a Bash round trip costing ~160 tokens per call.
 
+`tests` reads neotest through a consumer, the only way neotest hands out its
+client: `require("nvim-mcp.neotest").consumer` goes in neotest's `consumers`
+(this config does that in `lua/plugins/neotest.lua`). It records each run from
+neotest's own listeners, so the action reads a snapshot and never calls into
+neotest's async client.
+
+## Debug actions
+
+`nvim-mcp.debug` registers the `debug` tool over nvim-dap: `state`, `inspect`,
+`continue`, `step_over`, `step_into`, `step_out`, `pause`, `start`, `stop` and
+`breakpoint`. The `debug` skill in `../claude/skills/debug` explains each.
+
+- **`state` stays small.** Only the current frame's locals are expanded, one
+  level deep, values cut at 200 characters; other scopes (statics, globals,
+  registers) and other frames come back as refs and indexes for `inspect`.
+  Adapters disagree on which scopes are "expensive", so that flag alone does
+  not keep a stop's reply small.
+- **Controls wait in the bridge.** A control replies `{ poll = { action =
+  "state", args = { after = n } } }`, where `n` counts stops and ends seen by
+  nvim-dap listeners. The bridge switches to polling `state`, which is
+  `not_ready` until the count moves, so the editor stays usable while the
+  program runs.
+- **`inspect` evaluates in the "watch" context**, which every adapter treats
+  as an expression; codelldb reads "repl" input as LLDB commands. Side effects
+  happen, by agreement.
+- **Configurations that prompt are not started.** Any function-valued field
+  (mason-nvim-dap's `program = function() return vim.fn.input(...) end`)
+  would leave the human facing a prompt they did not ask for.
+- **Breakpoints Claude sets are marked `by_claude`** and sent to every
+  session at once.
+
 ## LSP actions
 
 `nvim-mcp.lsp` registers the editor's language servers as actions:
-`definition`, `references`, `hover` and `rename` advertised; `implementation`,
-`symbols`, `calls`, `code_actions`, `code_action` and `format` hidden. The
-`lsp` skill in `../claude/skills/lsp` explains when to use each.
+`definition`, `references`, `hover`, `implementation`, `symbols`, `calls` and
+`code_actions` on the `lsp` tool; `rename`, `code_action` and `format` on
+`lsp_edit`. Each tool lists all of its actions. The `lsp` skill in
+`../claude/skills/lsp` explains when to use each.
 
 - **Addressing** is `{ path, line, symbol }`; the column is found from the
   symbol, converted to the server's position encoding.
@@ -179,6 +248,16 @@ through a Bash round trip costing ~160 tokens per call.
   with an explicit redraw — immediately for edits, after 300 ms for lookups.
   If the wait ever matters, slow requests move to bridge-side polling, as
   `wait_for` does; the action interface stays the same.
+- **A server still loading is waited for in the bridge.** An attached server
+  that has not finished indexing answers with nothing, which reads as "none
+  found", so the action replies `not_ready` instead of asking, and the bridge
+  polls for up to a minute with the editor responsive. Readiness is
+  rust-analyzer's `experimental/serverStatus` when it sends one, otherwise
+  `$/progress` settling. A buffer an action has just loaded is given time for
+  a server to attach when some config names its filetype, which covers
+  rustaceanvim, whose attach waits on `cargo metadata`. The last attempt runs
+  lookups anyway, marked `loading`; edits refuse. `ContentModified` counts as
+  not ready.
 - **Edits are applied and saved, all or nothing.** A touched buffer with
   unsaved changes refuses the whole edit. Buffers an edit had to open are
   unlisted again afterwards. Edits a server sends back while running a command
@@ -194,8 +273,8 @@ nvim --headless -u tests/minimal_init.lua \
   -c "PlenaryBustedDirectory tests/ { minimal_init = 'tests/minimal_init.lua' }"
 ```
 
-113 tests covering registration, validation, ordering, invocation, hidden actions,
-search, the ported editor actions, config generation, and the LSP actions against
+189 tests covering registration, validation, ordering, invocation, hidden actions,
+the tool each action is on, readiness, quickfix, neotest results, debugging, search, the ported editor actions, config generation, and the LSP actions against
 an in-process fake language server (`tests/fake_lsp.lua`), and the bridge driven
 over real JSON-RPC (`tests/bridge_spec.lua`).
 The protocol itself is verified by driving the bridge with real JSON-RPC and by a real

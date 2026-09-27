@@ -54,3 +54,58 @@ describe("actions", function()
     assert.is_number(result.count)
   end)
 end)
+
+describe("project", function()
+  local function dir()
+    local path = vim.fs.normalize(vim.fn.tempname())
+    vim.fn.mkdir(path, "p")
+    vim.fn.writefile({ "x" }, path .. "/main.txt")
+    return path
+  end
+
+  local function same(a, b) return vim.fs.normalize(a):lower() == vim.fs.normalize(b):lower() end
+
+  after_each(function()
+    while #vim.api.nvim_list_tabpages() > 1 do
+      vim.cmd "tablast | tabclose!"
+    end
+  end)
+
+  it("opens a directory in a new tab with its own cwd, and keeps the human's tab", function()
+    local path = dir()
+    local entry = vim.api.nvim_get_current_tabpage()
+    local cwd = vim.fn.getcwd()
+    local reply = actions.project({ path = path }, {})
+    assert.is_true(reply.created)
+    assert.are.equal(2, #vim.api.nvim_list_tabpages())
+    assert.are.equal(entry, vim.api.nvim_get_current_tabpage())
+    assert.are.equal(cwd, vim.fn.getcwd(), "the human's tab kept its directory")
+    assert.is_true(same(path, vim.fn.getcwd(-1, reply.tab)))
+  end)
+
+  it("reuses the tab already open on that directory", function()
+    local path = dir()
+    local first = actions.project({ path = path }, {})
+    local again = actions.project({ path = path .. "/" }, {})
+    assert.is_false(again.created)
+    assert.are.equal(first.tab, again.tab)
+    assert.are.equal(2, #vim.api.nvim_list_tabpages())
+  end)
+
+  it("opens a file in the project's tab", function()
+    local path = dir()
+    local reply = actions.project({ path = path, file = "main.txt" }, {})
+    local tab = vim.api.nvim_list_tabpages()[reply.tab]
+    local window = vim.api.nvim_tabpage_get_win(tab)
+    assert.is_true(same(path .. "/main.txt", vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(window))))
+  end)
+
+  it("switches to the tab when asked", function()
+    local reply = actions.project({ path = dir(), focus = true }, {})
+    assert.are.equal(reply.tab, vim.fn.tabpagenr())
+  end)
+
+  it("refuses something that is not a directory", function()
+    assert.has_error(function() actions.project({ path = vim.fn.tempname() }, {}) end)
+  end)
+end)

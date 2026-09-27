@@ -129,6 +129,18 @@ end
 
 lines[#lines + 1] = "</nvim-checklist>"
 
+-- Claude Code's own `LSP` tool sits in the same deferred list as ours and its
+-- name matches the task better, but it starts a cold second copy of each
+-- server. The `lsp` skill says so, and only once it has been loaded; this says
+-- it before the choice is made.
+vim.list_extend(lines, {
+  "<nvim-lsp>",
+  "For definitions, references, hover and renames, use the editor's `lsp` and",
+  "`lsp_edit` tools, not the built-in `LSP`: they reach the servers already",
+  "running in Neovim. The `lsp` skill covers them.",
+  "</nvim-lsp>",
+})
+
 io.stdout:write(vim.json.encode {
   hookSpecificOutput = {
     hookEventName = "SessionStart",

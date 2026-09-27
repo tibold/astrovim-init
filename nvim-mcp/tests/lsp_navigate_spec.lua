@@ -31,10 +31,7 @@ describe("navigation", function()
     local reply = lsp.definition({ path = path, line = 2, symbol = "foo" }, {})
     assert.are.equal("fake", reply.server)
     assert.are.equal(1, reply.count)
-    assert.are.same(
-      { file = vim.fs.normalize(path), line = 1, column = 7, text = "local foo = 1" },
-      reply.locations[1]
-    )
+    assert.are.same({ file = vim.fs.normalize(path), line = 1, column = 7, text = "local foo = 1" }, reply.locations[1])
     local sent = requests[#requests].params.position
     assert.are.same({ line = 1, character = 6 }, sent)
   end)
@@ -80,7 +77,9 @@ describe("navigation", function()
 
   it("reads hover contents as markdown", function()
     local path = server(function()
-      return { ["textDocument/hover"] = function() return { contents = { kind = "markdown", value = "**foo** `number`" } } end }
+      return {
+        ["textDocument/hover"] = function() return { contents = { kind = "markdown", value = "**foo** `number`" } } end,
+      }
     end)
     local reply = lsp.hover { path = path, line = 1, symbol = "foo" }
     assert.are.equal("**foo** `number`", reply.text)
@@ -108,7 +107,11 @@ describe("navigation", function()
     local path = server(function(uri)
       return { ["textDocument/definition"] = function() return { uri = uri, range = fake.range(0, 6, 9) } end }
     end)
+    -- The fake server reports no progress; readiness is lsp_ready_spec's concern.
+    local ready = require "nvim-mcp.lsp.ready"
+    ready.FIRST_PROGRESS_MS = 0
     local out = mcp.invoke("definition", { path = path, line = 2, symbol = "foo" }, {})
+    ready.FIRST_PROGRESS_MS = 10000
     assert.is_true(out.ok)
     local decoded = vim.json.decode(out.content[1].text)
     assert.are.equal(1, decoded.locations[1].line)
@@ -116,15 +119,18 @@ describe("navigation", function()
 end)
 
 describe("registration", function()
-  it("advertises the everyday actions and hides the rest", function()
+  it("lists every lookup on the lsp tool and none on drive", function()
     mcp.tools, mcp.order = {}, {}
     lsp.setup()
-    local listed = vim.tbl_map(function(t) return t.name end, mcp.listed())
-    for _, name in ipairs { "definition", "references", "hover" } do
-      assert.is_true(vim.tbl_contains(listed, name), "should be advertised: " .. name)
+    local on_lsp = {}
+    for _, action in ipairs(mcp.listed()) do
+      assert.are_not.equal("drive", action.tool, action.name)
+      if action.tool == "lsp" then on_lsp[#on_lsp + 1] = action.name end
     end
-    assert.is_false(vim.tbl_contains(listed, "implementation"))
-    assert.is_truthy(mcp.tools.implementation)
-    assert.are.same({ "path", "line" }, mcp.tools.definition.inputSchema.required)
+    assert.are.same(
+      { "definition", "references", "hover", "implementation", "symbols", "calls", "code_actions" },
+      on_lsp
+    )
+    assert.are.same({ "path", "line" }, mcp.get("definition", "lsp").inputSchema.required)
   end)
 end)

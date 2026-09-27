@@ -1,5 +1,5 @@
 --- Language server actions: the servers this editor is already running,
---- reached through `drive`. They are warm and configured the way the human
+--- reached through the `lsp` and `lsp_edit` tools. They are warm and configured the way the human
 --- sees them, which Claude Code's own LSP tool -- a second set of servers --
 --- cannot promise.
 ---
@@ -11,6 +11,7 @@ local position = require "nvim-mcp.lsp.position"
 local request = require "nvim-mcp.lsp.request"
 local notice = require "nvim-mcp.lsp.notice"
 local edit = require "nvim-mcp.lsp.edit"
+local ready = require "nvim-mcp.lsp.ready"
 
 local M = {}
 
@@ -158,6 +159,14 @@ function M.symbols(args, opts)
     vim.lsp.get_clients()
   )
   if #clients == 0 then error { code = -32603, message = "No running language server supports workspace symbol search" } end
+  -- A server still indexing finds nothing, which would read as "no match".
+  for _, client in ipairs(clients) do
+    local busy = ready.busy(client)
+    if busy then
+      if not ready.final then ready.raise(client.name, busy) end
+      ready.proceeded = ("%s was %s"):format(client.name, busy)
+    end
+  end
 
   local items, servers, timed_out = {}, {}, false
   notice.during(("Claude · LSP symbols matching %q…"):format(args.query), M.QUIET_MS, function()
@@ -469,35 +478,48 @@ function M.positioned(extra, required)
   }
 end
 
+--- Lookups go on the `lsp` tool and edits on `lsp_edit`, so a permission rule
+--- can allow one and still ask for the other. Each tool lists all of its
+--- actions: there are few enough that none needs hiding.
 function M.setup()
-  mcp.register {
+  ready.setup()
+  -- Every action can find its server still loading; see nvim-mcp.lsp.ready.
+  local function register(spec)
+    spec.handler = ready.guard(spec.handler, spec.tool == "lsp_edit")
+    mcp.register(spec)
+  end
+
+  register {
     name = "definition",
+    tool = "lsp",
     description = "Where the symbol at a file and line is defined, from the editor's language server.",
     inputSchema = M.positioned(),
     handler = M.definition,
   }
-  mcp.register {
+  register {
     name = "references",
+    tool = "lsp",
     description = "Every reference to the symbol at a file and line, grouped by file.",
     inputSchema = M.positioned(),
     handler = M.references,
   }
-  mcp.register {
+  register {
     name = "hover",
+    tool = "lsp",
     description = "Type and documentation for the symbol at a file and line.",
     inputSchema = M.positioned(),
     handler = M.hover,
   }
-  mcp.register {
+  register {
     name = "implementation",
-    hidden = true,
+    tool = "lsp",
     description = "Implementations of the interface or abstract member at a file and line.",
     inputSchema = M.positioned(),
     handler = M.implementation,
   }
-  mcp.register {
+  register {
     name = "symbols",
-    hidden = true,
+    tool = "lsp",
     description = "A file's symbol outline (path), or a workspace-wide symbol search (query).",
     inputSchema = {
       type = "object",
@@ -509,22 +531,23 @@ function M.setup()
     },
     handler = M.symbols,
   }
-  mcp.register {
+  register {
     name = "calls",
-    hidden = true,
+    tool = "lsp",
     description = "Who calls the function at a file and line (incoming), or what it calls (outgoing).",
     inputSchema = M.positioned { direction = { type = "string", enum = { "incoming", "outgoing" } } },
     handler = M.calls,
   }
-  mcp.register {
+  register {
     name = "rename",
+    tool = "lsp_edit",
     description = "Rename the symbol at a file and line across the workspace; applied and saved.",
     inputSchema = M.positioned({ new_name = { type = "string" } }, { "new_name" }),
     handler = M.rename,
   }
-  mcp.register {
+  register {
     name = "format",
-    hidden = true,
+    tool = "lsp_edit",
     description = "Format a file, or lines line..end_line, with its language server; applied and saved.",
     inputSchema = {
       type = "object",
@@ -538,9 +561,9 @@ function M.setup()
     },
     handler = M.format,
   }
-  mcp.register {
+  register {
     name = "code_actions",
-    hidden = true,
+    tool = "lsp",
     description = "List the fixes and refactors language servers offer on lines line..end_line; changes nothing.",
     inputSchema = {
       type = "object",
@@ -554,9 +577,9 @@ function M.setup()
     },
     handler = M.code_actions,
   }
-  mcp.register {
+  register {
     name = "code_action",
-    hidden = true,
+    tool = "lsp_edit",
     description = "Apply one code action by its exact title from code_actions; applied and saved.",
     inputSchema = {
       type = "object",

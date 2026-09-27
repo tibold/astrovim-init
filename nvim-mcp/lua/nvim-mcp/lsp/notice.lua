@@ -76,6 +76,23 @@ function M.close(handle)
   if M.active == handle then M.active = nil end
 end
 
+--- The notice left up by linger(), if any.
+M.lingering = nil
+
+--- Put `text` up for `ms`, replacing an earlier lingering notice. For waits
+--- the editor is not blocked by: the bridge polls, and each poll refreshes
+--- this, so it stays up while Claude waits and goes soon after.
+function M.linger(text, ms)
+  if M.lingering then M.close(M.lingering) end
+  local handle = M.open(text)
+  M.lingering = handle
+  handle.expiry = vim.defer_fn(function()
+    if M.lingering == handle then M.lingering = nil end
+    M.close(handle)
+  end, ms)
+  return handle
+end
+
 --- Run `fn` with the notice up, closing it however `fn` ends.
 function M.during(text, delay_ms, fn)
   local handle = M.open(text, delay_ms)

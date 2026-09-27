@@ -42,12 +42,36 @@ An instance running an older `nvim-mcp` reports no interface either way and is
 listed rather than skipped, which is the safe direction: an unknown is treated
 as possibly real.
 
+An editor can be too busy to answer the probe — Roslyn loading a large solution
+holds it for seconds at a time. Editors announce themselves, so such an editor
+is still listed, as `busy: true` with the directory it works in. Target it by
+its address as usual; a call waits for it, or ask `instances` again shortly.
+
 You rarely need it. Omitting `instance` targets the host, which is the right
 editor whenever Claude Code is running in one of its terminal buffers — the
 normal case. Reach for `instances` only when the human is working across several
 worktrees and the file in question lives in a different one. **The mapping from
 address to worktree changes every session, so never hardcode it.** Opening a
 file in the wrong editor is confusing.
+
+## Projects in tabs
+
+```json
+{ "action": "project", "args": { "path": "D:\source\api", "file": "src/main.rs" } }
+```
+
+Opens a directory as a project: a new tab page whose working directory
+(`:tcd`) is that directory, optionally with a file open in it. Tools that find
+a project from the working directory — neotest, pickers, `:make`, debug
+configurations' `${workspaceFolder}` — then treat it as its own project. Use it
+when the work is in a directory other than the editor's own: another worktree,
+a sub-project of a monorepo, a testbed. neotest in particular only finds tests
+under a directory it was pointed at.
+
+The human's tab stays on screen (`focus_kept`), because Claude's terminal is
+in it; they switch with `gt`. `focus: true` switches them. A tab already on
+that directory is reused. `show` and `state` work on the tab the human is
+looking at.
 
 ## Showing code
 
@@ -117,10 +141,34 @@ Mirroring your working plan into the panel beside their code is covered by the
 `checklist` skill, which carries the operation contract and the grouping rules.
 The action is `checklist_update`.
 
+## Quickfix
+
+Reading what `:make` or `:grep` just produced, and handing the human a list of
+places to step through, are covered by the `quickfix` skill.
+
+## Test results
+
+The human's last neotest run — counts, and each failure with its output — is
+covered by the `neotest` skill.
+
+## Debugging
+
+The human's nvim-dap session — where it stopped, locals, stepping, breakpoints
+— is on its own `debug` tool, covered by the `debug` skill.
+
+## Looking inside the editor
+
+When something misbehaves and no action reports the state you need — a
+plugin's internals, an option's value, what an adapter registered — the `lua`
+tool runs a Lua chunk in the editor (`eval`, `return` for the result). Read
+rather than change, keep it quick, and prefer a dedicated action when there is
+one.
+
 ## Code navigation and refactoring
 
 Definitions, references, hover, renames and code actions through the editor's
-own language servers are covered by the `lsp` skill.
+own language servers are on two further tools, `lsp` and `lsp_edit`, covered
+by the `lsp` skill.
 
 ## Closing a buffer
 
