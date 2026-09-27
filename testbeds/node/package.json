@@ -1,0 +1,14 @@
+{
+  "name": "testbed",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A small package for checking debugging and tests in Neovim.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest": "^30.5.2"
+  }
+}

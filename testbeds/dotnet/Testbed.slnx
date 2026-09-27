@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Testbed.Cli/Testbed.Cli.csproj" />
+    <Project Path="src/Testbed.Core/Testbed.Core.csproj" />
+    <Project Path="src/Testbed.Web/Testbed.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Testbed.Core.Tests/Testbed.Core.Tests.csproj" />
+    <Project Path="tests/Testbed.Web.Tests/Testbed.Web.Tests.csproj" />
+  </Folder>
+</Solution>

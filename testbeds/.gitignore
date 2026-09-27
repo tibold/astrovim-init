@@ -1,0 +1,7 @@
+rust/target/
+python/.venv/
+__pycache__/
+.pytest_cache/
+node/node_modules/
+dotnet/**/bin/
+dotnet/**/obj/

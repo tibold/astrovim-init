@@ -1,0 +1,25 @@
+@using Testbed.Core
+
+<p class="greeting">@text</p>
+<button class="next" @onclick="Next">Next</button>
+
+@code {
+    [Parameter] public string[] Names { get; set; } = ["ann", "bob", "cy"];
+
+    private int index;
+    private string text = "";
+
+    protected override void OnParametersSet() => Show();
+
+    private void Next()
+    {
+        index = (index + 1) % Names.Length;
+        Show();
+    }
+
+    private void Show()
+    {
+        var name = Names[index];
+        text = Greeter.Greet(name);
+    }
+}
