@@ -174,6 +174,7 @@ end
 function M.setup(opts)
   require("nvim-mcp.config").setup(opts)
   require("nvim-mcp.actions").setup()
+  require("nvim-mcp.lsp").setup()
 end
 
 return M

@@ -287,13 +287,22 @@ handlers["tools/call"] = function(id, params)
     return text(spec)
   end
 
+  -- A relative path means relative to Claude's session, which is this bridge's
+  -- working directory. The editor may be in another project entirely, where
+  -- the same relative path names a different file.
+  if type(args.path) == "string" and args.path ~= "" and vim.fn.isabsolutepath(args.path) == 0 then
+    args.path = vim.fs.joinpath(vim.uv.cwd(), args.path)
+  end
+
   -- Waiting belongs here rather than in the editor. A loop inside Neovim would
   -- block the very session whose language servers are being waited on, so the
-  -- thing being waited for could never happen. Both keys are consumed here and
-  -- not forwarded, because the editor-side action knows nothing about them.
+  -- thing being waited for could never happen. With wait_for, both keys are
+  -- the bridge's and are not forwarded; without it, `timeout` belongs to the
+  -- action (the LSP actions' request timeout).
   local wait_for = args.wait_for
   local timeout = math.min(tonumber(args.timeout) or 60, MAX_WAIT)
-  args.wait_for, args.timeout = nil, nil
+  args.wait_for = nil
+  if wait_for then args.timeout = nil end
 
   local deadline = os.time() + timeout
   while true do

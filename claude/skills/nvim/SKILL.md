@@ -117,6 +117,11 @@ Mirroring your working plan into the panel beside their code is covered by the
 `checklist` skill, which carries the operation contract and the grouping rules.
 The action is `checklist_update`.
 
+## Code navigation and refactoring
+
+Definitions, references, hover, renames and code actions through the editor's
+own language servers are covered by the `lsp` skill.
+
 ## Closing a buffer
 
 ```json

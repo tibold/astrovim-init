@@ -1,6 +1,8 @@
 local here = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h")
 local root = vim.fn.fnamemodify(here, ":h")
 
-vim.opt.rtp:append "C:/Users/TiboldKandrai/AppData/Local/nvim-data/lazy/plenary.nvim"
+-- From stdpath rather than a spelled-out home directory: the user name differs
+-- between machines, and a missing plenary hangs the run instead of failing it.
+vim.opt.rtp:append(vim.fn.stdpath "data" .. "/lazy/plenary.nvim")
 vim.opt.rtp:append(root)
 vim.cmd "runtime plugin/plenary.vim"

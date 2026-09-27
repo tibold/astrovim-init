@@ -24,8 +24,11 @@ A `SessionStart` hook injects a short standing instruction to keep the checklist
 gated on `$NVIM` so it costs nothing in a session with no editor attached. Installation is
 a one-off and belongs in a dotfiles repo; this repository only *delivers* the plugin.
 
-`${CLAUDE_PLUGIN_ROOT}` resolves to this repository, not to a copy under
-`~/.claude/plugins`, so edits to `claude/server.lua` are live without reinstalling.
+Installing copies `claude/` into `~/.claude/plugins/cache/tibold-nvim/nvim/<version>`,
+and that copy is what `${CLAUDE_PLUGIN_ROOT}` points at. Changes to `claude/server.lua`,
+the skills or the hooks therefore reach Claude Code only after bumping the version in
+`claude/.claude-plugin/plugin.json` and running `claude plugin update nvim@tibold-nvim`.
+Actions registered inside the editor need none of this: they are live on reload.
 
 Claude Code spawns the bridge as a child process, so it inherits `$NVIM` and already
 knows which editor to talk to. Several Neovim instances each get a bridge bound to their
@@ -162,6 +165,27 @@ every first use.
 These are ported from the `driving-neovim` skill's `drive.lua`, which reached the editor
 through a Bash round trip costing ~160 tokens per call.
 
+## LSP actions
+
+`nvim-mcp.lsp` registers the editor's language servers as actions:
+`definition`, `references`, `hover` and `rename` advertised; `implementation`,
+`symbols`, `calls`, `code_actions`, `code_action` and `format` hidden. The
+`lsp` skill in `../claude/skills/lsp` explains when to use each.
+
+- **Addressing** is `{ path, line, symbol }`; the column is found from the
+  symbol, converted to the server's position encoding.
+- **Requests are synchronous**, with `timeout` (default 5 s, max 30 s). The
+  editor waits while one runs, so a floating `Claude · LSP …` notice is drawn
+  with an explicit redraw — immediately for edits, after 300 ms for lookups.
+  If the wait ever matters, slow requests move to bridge-side polling, as
+  `wait_for` does; the action interface stays the same.
+- **Edits are applied and saved, all or nothing.** A touched buffer with
+  unsaved changes refuses the whole edit. Buffers an edit had to open are
+  unlisted again afterwards. Edits a server sends back while running a command
+  (`workspace/applyEdit`) are captured and follow the same rules.
+
+Design: `../docs/superpowers/specs/2026-09-27-lsp-actions-design.md`.
+
 ## Tests
 
 ```bash
@@ -170,8 +194,10 @@ nvim --headless -u tests/minimal_init.lua \
   -c "PlenaryBustedDirectory tests/ { minimal_init = 'tests/minimal_init.lua' }"
 ```
 
-31 tests covering registration, validation, ordering, invocation, hidden actions,
-search, the ported editor actions and config generation.
+113 tests covering registration, validation, ordering, invocation, hidden actions,
+search, the ported editor actions, config generation, and the LSP actions against
+an in-process fake language server (`tests/fake_lsp.lua`), and the bridge driven
+over real JSON-RPC (`tests/bridge_spec.lua`).
 The protocol itself is verified by driving the bridge with real JSON-RPC and by a real
 `claude` session, rather than mocked.
 
