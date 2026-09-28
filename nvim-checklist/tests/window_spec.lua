@@ -14,6 +14,23 @@ describe("window", function()
     if window.is_open() then window.close() end
   end)
 
+  it("wraps long items with the continuation hung under the text", function()
+    -- Unwrapped, the cursor landing on a long line scrolled the view sideways
+    -- and the shorter lines around it disappeared off the left edge.
+    state.apply_payload {
+      ops = { { op = "set", id = "a", text = string.rep("word ", 20), note = string.rep("note ", 20) } },
+    }
+    render.render()
+    window.open()
+    assert.is_true(vim.wo[window.win].wrap)
+    local item = vim.api.nvim_buf_get_lines(render.ensure_buf(), 0, 1, false)[1]
+    local text_col = vim.fn.strdisplaywidth(item:match "^%s*%S+%s+")
+    local matched = vim.fn.matchstrpos(item, vim.bo[render.ensure_buf()].formatlistpat)
+    assert.are.equal(text_col, vim.fn.strdisplaywidth(matched[1]))
+    local note = vim.api.nvim_buf_get_lines(render.ensure_buf(), 1, 2, false)[1]
+    assert.are.equal("", vim.fn.matchstr(note, vim.bo[render.ensure_buf()].formatlistpat))
+  end)
+
   it("returns to the starting state after two toggles (criterion 18)", function()
     local before = #vim.api.nvim_tabpage_list_wins(0)
     window.toggle()

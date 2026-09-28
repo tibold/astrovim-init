@@ -51,7 +51,7 @@ describe("render", function()
     assert.are.same({ "Workstream" }, headings())
   end)
 
-  it("truncates long text and never wraps (criterion 14)", function()
+  it("truncates long text to one buffer line (criterion 14)", function()
     state.apply_payload { ops = { set("a", { text = string.rep("x", 400) }) } }
     render.render()
     assert.are.equal(1, #lines()) -- one ungrouped item: no heading, no blank tail
@@ -120,8 +120,8 @@ describe("render", function()
   end)
 
   it("puts a note on its own line beneath the item", function()
-    -- Appended, a note pushed the line past the panel width, and the panel
-    -- never wraps, so what a blocked item was waiting on fell off the edge.
+    -- Appended, a note pushed the line past the panel width, and back when the
+    -- panel did not wrap, what a blocked item was waiting on fell off the edge.
     state.apply_payload { ops = { set("a", { text = "Cut DNS over", note = "vendor TTL is 48h" }) } }
     render.render()
     local out = lines()

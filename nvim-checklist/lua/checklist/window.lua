@@ -43,7 +43,15 @@ local WIN_OPTIONS = {
   relativenumber = false,
   signcolumn = "no",
   cursorline = true,
-  wrap = false,
+  -- Wrapped, because items run to 120 characters in a panel a third of that
+  -- wide. Unwrapped, moving onto a long line scrolled the whole view sideways
+  -- and every shorter line vanished off the left edge. `list:-1` hangs the
+  -- continuation under the item text, using the pattern render.lua sets as
+  -- the buffer's 'formatlistpat'; a note keeps its own indent.
+  wrap = true,
+  linebreak = true,
+  breakindent = true,
+  breakindentopt = "list:-1",
   foldcolumn = "0",
   list = false,
 }

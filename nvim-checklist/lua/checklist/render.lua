@@ -34,6 +34,18 @@ local LINKS = {
   ChecklistEmpty = "NonText",
 }
 
+--- Matches an item line's indent and icon, so the window's `breakindentopt =
+--- "list:-1"` hangs wrapped text under the item text rather than the icon.
+function M.list_pattern()
+  local alts = {}
+  for _, set in pairs(ICONS) do
+    for _, icon in pairs(set) do
+      alts[#alts + 1] = vim.fn.escape(icon, [[\.*[]~^$]])
+    end
+  end
+  return [[^\s*\%(]] .. table.concat(alts, [[\|]]) .. [[\)\s\+]]
+end
+
 --- `default = true` so a user's colorscheme override wins.
 function M.setup_highlights()
   for name, link in pairs(LINKS) do
@@ -52,6 +64,7 @@ function M.ensure_buf()
   vim.bo[buf].swapfile = false
   vim.bo[buf].modifiable = false
   vim.bo[buf].filetype = "checklist"
+  vim.bo[buf].formatlistpat = M.list_pattern()
   pcall(vim.api.nvim_buf_set_name, buf, "checklist://session")
   M.buf = buf
   return buf
@@ -105,7 +118,7 @@ function M.build()
     -- The note goes on its own line rather than trailing the text. Appended, a
     -- note pushed the line past the panel width and the part that mattered --
     -- what a blocked item is waiting on -- was the part that fell off the end.
-    -- The panel never wraps, so nothing off the right edge is readable at all.
+    -- Wrapping now keeps it readable, but on its own line it still stands out.
     -- `~= ""` as well as non-nil: state.lua now clears an empty note before it
     -- gets here, but a session file written before that still carries one, and
     -- an empty note renders as an indented blank line that reads as a gap in
