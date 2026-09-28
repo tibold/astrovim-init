@@ -13,6 +13,10 @@ return {
   { import = "astrocommunity.pack.bash" },
   { import = "astrocommunity.pack.json" },
   { import = "astrocommunity.pack.yaml" },
+  -- After the yaml pack: it wraps that pack's yaml filetype rule, turning any
+  -- yaml or tpl file under a Chart.yaml into `helm` so yamlls stops parsing
+  -- the template syntax.
+  { import = "astrocommunity.pack.helm" },
   { import = "astrocommunity.pack.markdown" },
   { import = "astrocommunity.pack.docker" },
   { import = "astrocommunity.pack.ps1" },
