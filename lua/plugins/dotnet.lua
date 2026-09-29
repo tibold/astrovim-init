@@ -98,8 +98,6 @@ local function windows_ready(adapter)
 end
 
 return {
-  -- References code lens costs a solution-wide find-all-refs on every attach
-  { "AstroNvim/astrolsp", opts = { features = { codelens = false } } },
   {
     "GustavEikaas/easy-dotnet.nvim",
     dependencies = { "nvim-lua/plenary.nvim", "folke/snacks.nvim" },
@@ -120,7 +118,11 @@ return {
                 dotnet_show_completion_items_from_unimported_namespaces = false,
               },
               ["csharp|code_lens"] = {
-                dotnet_enable_references_code_lens = false,
+                -- Each "N references" is a solution-wide count, but Neovim 0.12
+                -- only resolves the lenses on screen, in the background. If
+                -- Roslyn's CPU use shows on the work solution, turn this off.
+                dotnet_enable_references_code_lens = true,
+                -- Its Run/Debug commands are VS Code's; tests go through neotest
                 dotnet_enable_tests_code_lens = false,
               },
               ["csharp|symbol_search"] = {
