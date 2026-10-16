@@ -52,6 +52,35 @@ vim.api.nvim_create_autocmd("User", {
   callback = function() vim.defer_fn(prewarm, 100) end,
 })
 
+--- Roslyn asks the html server about a Razor file's markup through Neovim,
+--- and roslyn.nvim waits for that server to attach to the file's hidden HTML
+--- copy with vim.wait, which holds up typing: up to 5s per question while the
+--- server starts (see dotnet.md). The questions are handled in a coroutine,
+--- so wait there by yielding first; the plugin's own wait then returns at once.
+local function wait_for_html_without_blocking()
+  local manager = require "roslyn.razor.documentManager"
+  local types = require "roslyn.razor.types"
+  local get_document = manager.getDocument
+
+  manager.getDocument = function(self, uri, checksum)
+    local co = coroutine.running()
+    local path = uri:match(vim.pesc(types.virtualHtmlSuffix) .. "$") and uri or uri .. types.virtualHtmlSuffix
+    local doc = co and manager.htmlDocuments[path]
+    if doc then
+      local function ready()
+        if checksum and manager.pendingUpdates[doc.path] and doc:getChecksum() ~= checksum then return false end
+        return vim.lsp.get_clients({ bufnr = doc.buf, name = types.html_lsp_name })[1] ~= nil
+      end
+      local deadline = vim.uv.now() + 5000
+      while not ready() and vim.uv.now() < deadline do
+        vim.defer_fn(function() coroutine.resume(co) end, 20)
+        coroutine.yield()
+      end
+    end
+    return get_document(self, uri, checksum)
+  end
+end
+
 return {
   {
     "seblyng/roslyn.nvim",
@@ -112,6 +141,10 @@ return {
         config.cmd = { tool, "--stdio", "--daemon-mode", "--clientProcessId", tostring(vim.uv.os_getpid()) }
       end
       vim.lsp.config("roslyn", config)
+    end,
+    config = function(_, opts)
+      require("roslyn").setup(opts)
+      wait_for_html_without_blocking()
     end,
   },
 }

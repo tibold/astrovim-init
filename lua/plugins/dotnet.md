@@ -20,6 +20,22 @@ Workarounds live in `dotnet.lua`. Found on Windows with roslyn.nvim and the
 Found under easy-dotnet.nvim, which hands the watching to Neovim on Windows and
 macOS; roslyn.nvim's default (`"auto"`) does the same.
 
+## Typing is held up when a Razor file is first opened
+
+- **Symptom:** opening the first `.razor` file of a session freezes the editor
+  for a second up to several seconds; measured 633ms one time, longer while
+  Roslyn loads a solution from a cold cache.
+- **Cause:** Roslyn asks the `html` server about a Razor file's markup through
+  the client (folding ranges, colours, hover…). roslyn.nvim's
+  `documentManager.getDocument` first waits, with `vim.wait(5000)`, for that
+  server to attach to the file's hidden `__virtual.html` copy; `vim.wait` keeps
+  timers running but holds up keys. The server is Node and starts slowly on
+  Windows, so the first questions each wait for it, up to 5s apiece.
+- **Workaround:** `getDocument` is wrapped to wait by yielding first: Neovim
+  handles server requests in a coroutine, so the plugin's own wait then finds
+  its condition met and returns at once. Drop it once roslyn.nvim waits
+  without blocking.
+
 ## Which Roslyn runs, and updating it
 
 - **What happens:** roslyn.nvim runs Mason's `roslyn-language-server` when
