@@ -1,50 +1,41 @@
-# .NET: known plugin issues
+# .NET: known issues
 
-Workarounds live in `dotnet.lua`. Found on Windows with easy-dotnet.nvim
-(checkout of 2026-09-15); not reported upstream.
+Workarounds live in `dotnet.lua`. Found on Windows with roslyn.nvim and the
+`roslyn-language-server` global tool; not reported upstream.
 
-## easy-dotnet's neotest adapter finds no test files
+## Neovim freezes while files in the solution change
 
-- **Symptom:** `<Leader>T` shows no .NET tests; neotest runs nothing.
-- **Cause:** the test runner reports files with forward slashes, neotest asks
-  with backslashes, and `is_test_file` compares them as strings
-  (`vim.fn.resolve` does not change separators).
-- **Workaround:** the adapter is asked with forward slashes, and the tree it
-  returns is handed back with the platform's own; neotest merges trees by path
-  prefix, and a forward-slash file under a backslash directory crashes that.
+- **Symptom:** the editor locks up during a build, a checkout or a burst of
+  edits from outside it; writing 300 files into an `obj/` folder stalled it for
+  3s, one stall 622ms. An editor without Roslyn did not stall at all.
+- **Cause:** when Neovim does Roslyn's file watching, a large solution's
+  projects register ~3,700 watchers, 340 of them on its `src/` folder itself.
+  Neovim starts one recursive OS watcher per watcher and runs each one's
+  callback on the main loop, so every change under `src/` costs ~350.
+- **Workaround:** `filewatching = "roslyn"`: Neovim does not offer file
+  watching, so Roslyn watches in its own process. Neovim's watching is said to
+  catch changes Roslyn's misses; if a file made outside the editor goes unseen
+  until opened, this is why.
 
-## Tests are only discovered at startup, and only sometimes
+Found under easy-dotnet.nvim, which hands the watching to Neovim on Windows and
+macOS; roslyn.nvim's default (`"auto"`) does the same.
 
-- **Symptom:** the runner knows the solution but no projects or tests under it.
-- **Cause:** projects and tests come from the runner's `quick_discover`, which
-  only easy-dotnet's startup calls, and only when a solution is already selected
-  for the editor's directory then. The neotest adapter only calls
-  `initialize`.
-- **Workaround:** `quick_discover` runs once when the adapter finds no projects.
+## Which Roslyn runs, and updating it
 
-## One run that never completes blocks all later runs
+- **What happens:** roslyn.nvim runs Mason's `roslyn-language-server` when
+  there is one, else the first on the PATH; `dotnet.lua` points it at the
+  global tool's launcher instead.
+- **Razor needs** `5.12.0-1.26453.19` or later (roslyn.nvim's README).
+- **Updating:** from the Azure DevOps feed, with an explicit `--version`. A
+  plain `--prerelease` update from the feed picks a `-test` build, since
+  `1-test` sorts above `1`. Close every editor with C# open first: on Windows
+  the running server holds the tool's files open, and the update fails.
 
-- **Symptom:** a .NET test run stays "running" forever, and every later run
-  waits behind it until Neovim restarts.
-- **Cause:** runs are queued one at a time, and each waits for its root node's
-  final status with no timeout; a run for a node the server does not know (one
-  started before discovery) never gets one.
-- **Workaround:** none directly; discovering first keeps runs from starting that
-  early.
+  ```
+  dotnet tool update -g roslyn-language-server --version <version> --source https://pkgs.dev.azure.com/azure-public/vside/_packaging/vs-impl/nuget/v3/index.json
+  ```
 
-## Which Roslyn runs depends on what is installed
-
-- **What happens:** easy-dotnet's wrapper runs the `roslyn-language-server`
-  global tool, falling back to whatever `roslyn-language-server` is on the PATH
-  (Mason's `bin` comes first in Neovim) when the tool is missing, and installs
-  the tool when started from a shell without it.
-- **Now:** only the global tool is installed, pinned to `5.12.0-1.26475.2`
-  from the Azure DevOps feed (easy-dotnet's README names it). nuget.org is
-  behind that feed, and a plain `--prerelease` update from the feed picks a
-  `-test` build, since `1-test` sorts above `1`; update with an explicit
-  `--version`.
-
-## Unrelated, but it looked like one: Razor markup in Brixter
+## Unrelated, but it looked like one: Razor markup in the work solution
 
 Razor markup had no answers because Roslyn could not load the project: the
 repo's `StaticAssets.targets` errors on stale, gitignored `.razor.css` files

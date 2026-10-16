@@ -43,7 +43,7 @@ return {
 
   -- NOTE: deliberately NOT `astrocommunity.pack.cs`. That pack sets up
   -- `csharp_ls` and csharpls-extended-lsp, which would run alongside the
-  -- roslyn.nvim server configured in `lua/plugins/roslyn.lua` and fight it for
+  -- roslyn.nvim server configured in `lua/plugins/dotnet.lua` and fight it for
   -- the same buffers. C# support lives in that file instead.
 
   -- Neither of these touches C# or razor. prettierd is registered as a none-ls
