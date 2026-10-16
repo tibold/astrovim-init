@@ -97,6 +97,80 @@ local function windows_ready(adapter)
   return adapter
 end
 
+--- easy-dotnet's language servers, started by full path rather than by name.
+---
+--- Their commands name the EasyDotnet tool bare (`dotnet-easydotnet`), and
+--- Neovim checks a bare name with a PATH search each time it considers starting
+--- one, ten times on opening the first C# file at ~15ms each on Windows. Global
+--- tools always land in ~/.dotnet/tools (or under DOTNET_CLI_HOME), on every
+--- platform, so the full path is known up front and costs nothing to check.
+--- Left as is when the tool is somewhere else, such as a --tool-path install.
+---
+--- The configs only exist once setup has run, and setup checks them too, so
+--- for its duration the tools folder goes first on PATH, where the search
+--- finds the bare name at once.
+local function setup_with_tool_path(opts)
+  local exe = vim.fs.joinpath(vim.env.DOTNET_CLI_HOME or vim.uv.os_homedir(), ".dotnet", "tools",
+    "dotnet-easydotnet" .. (vim.fn.has "win32" == 1 and ".exe" or ""))
+  if not vim.uv.fs_stat(exe) then return require("easy-dotnet").setup(opts) end
+
+  local path = vim.env.PATH
+  vim.env.PATH = vim.fs.dirname(exe) .. (vim.fn.has "win32" == 1 and ";" or ":") .. path
+  local ok, err = pcall(require("easy-dotnet").setup, opts)
+  vim.env.PATH = path
+  if not ok then error(err, 0) end
+
+  local constants = require "easy-dotnet.constants"
+  for _, name in ipairs { constants.lsp_client_name, constants.lsp_html_client_name, constants.lsp_projx_client_name } do
+    local config = vim.lsp.config[name]
+    if config and type(config.cmd) == "table" and config.cmd[1] == "dotnet-easydotnet" then
+      local cmd = vim.deepcopy(config.cmd)
+      cmd[1] = exe
+      vim.lsp.config(name, { cmd = cmd })
+    end
+  end
+end
+
+--- Load, while the editor is idle after startup, what the first C# file would
+--- otherwise load while the screen waits: nvim-dap and its Mason and UI
+--- extensions (~240ms, which easy-dotnet's setup requires), and the C#
+--- treesitter queries (~150ms, compiled once per session). Only in a directory
+--- with a solution or project at the top or one level down.
+---
+--- Not easy-dotnet itself: its setup starts Roslyn on the selected solution,
+--- which is the load that should wait until a C# file is actually opened.
+local function prewarm()
+  local found = false
+  for _, pattern in ipairs { "*.sln", "*.slnx", "*.csproj", "*/*.sln", "*/*.slnx", "*/*.csproj" } do
+    if #vim.fn.glob(pattern, false, true) > 0 then
+      found = true
+      break
+    end
+  end
+  if not found then return end
+
+  -- One step per tick, so a keypress in between is not held up by all of them
+  local steps = {
+    function() pcall(require, "dap") end,
+    function() pcall(vim.treesitter.language.add, "c_sharp") end,
+  }
+  for _, query in ipairs { "highlights", "injections", "locals", "folds" } do
+    table.insert(steps, function() pcall(vim.treesitter.query.get, "c_sharp", query) end)
+  end
+  local function run(i)
+    if not steps[i] then return end
+    steps[i]()
+    vim.defer_fn(function() run(i + 1) end, 10)
+  end
+  run(1)
+end
+
+vim.api.nvim_create_autocmd("User", {
+  pattern = "VeryLazy",
+  once = true,
+  callback = function() vim.defer_fn(prewarm, 100) end,
+})
+
 return {
   {
     "GustavEikaas/easy-dotnet.nvim",
@@ -150,6 +224,7 @@ return {
         test_runner = { neotest_integration = true },
       }
     end,
+    config = function(_, opts) setup_with_tool_path(opts) end,
   },
   {
     "nvim-neotest/neotest",
