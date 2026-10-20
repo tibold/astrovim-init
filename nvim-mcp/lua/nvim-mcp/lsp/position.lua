@@ -19,22 +19,13 @@ function M.buffer_for(path)
   end
 end
 
---- Reload an unmodified buffer whose file changed on disk. Claude's own Edit
---- tool writes files behind the editor's back: without this a lookup reads
---- stale text, and saving an edit hits Vim's "file has changed" prompt, which
---- blocks the tool call until the human answers it. A buffer with unsaved
---- work is left alone -- an edit refuses it as modified anyway.
-function M.refresh(buffer)
-  if not vim.api.nvim_buf_is_loaded(buffer) or vim.bo[buffer].buftype ~= "" then return end
-  local group = vim.api.nvim_create_augroup("nvim_mcp_refresh", { clear = true })
-  vim.api.nvim_create_autocmd("FileChangedShell", {
-    group = group,
-    buffer = buffer,
-    callback = function() vim.v.fcs_choice = vim.bo[buffer].modified and "" or "reload" end,
-  })
-  pcall(vim.cmd, "silent checktime " .. buffer)
-  vim.api.nvim_del_augroup_by_id(group)
-end
+--- Reload an unmodified buffer whose file changed on disk; true when it did.
+--- Claude's own Edit tool writes files behind the editor's back: without this
+--- a lookup reads stale text, and saving an edit hits Vim's "file has changed"
+--- prompt, which blocks the tool call until the human answers it. A buffer
+--- with unsaved work is left alone -- an edit refuses it as modified anyway.
+--- How it avoids every prompt is nvim-mcp.lsp.disk's business.
+function M.refresh(buffer) return require("nvim-mcp.lsp.disk").reload(buffer) end
 
 --- The loaded buffer for `path`, without showing it, and current with the
 --- file on disk. A buffer this loads gets its filetype detected, because
@@ -46,7 +37,9 @@ function M.buffer(path)
 
   local buffer = M.buffer_for(full) or vim.fn.bufadd(require("nvim-mcp.path").native(full))
   if not vim.api.nvim_buf_is_loaded(buffer) then
-    vim.fn.bufload(buffer)
+    -- Never asking about another session's swap file; see nvim-mcp.lsp.disk.
+    local ok, err = require("nvim-mcp.lsp.disk").unasked(vim.fn.bufload, buffer)
+    if not ok then error(err, 0) end
     -- FileType fires here, so a server may be on its way; see ready.
     require("nvim-mcp.lsp.ready").loaded[buffer] = vim.uv.now()
     if vim.bo[buffer].filetype == "" then vim.api.nvim_buf_call(buffer, function() vim.cmd "filetype detect" end) end

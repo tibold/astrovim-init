@@ -5,6 +5,7 @@
 --- editor. All or nothing, because unsaved work in a touched buffer is the
 --- human's: mixing an edit into it would leave neither version intact.
 local position = require "nvim-mcp.lsp.position"
+local disk = require "nvim-mcp.lsp.disk"
 
 local M = {}
 
@@ -59,18 +60,81 @@ function M.modified(files)
   return out
 end
 
+--- vim.lsp.util.apply_workspace_edit, one change at a time where the edit
+--- creates, renames or deletes files. Such a change is the edit's own work on
+--- disk: a buffer holding a file it rewrote -- created over an existing one,
+--- say -- is read again before the text edits computed for the new file land
+--- in it, and the file's `before` (see apply) becomes what the change left.
+--- Text edits keep their index, which decides whether their version is
+--- checked, and the edit's change annotations, as Neovim's own loop does.
+local function apply_changes(workspace_edit, encoding, before)
+  local changes, annotations = workspace_edit.documentChanges, workspace_edit.changeAnnotations
+  local resources = vim.iter(changes or {}):any(function(change) return change.kind ~= nil end)
+  if not resources then return vim.lsp.util.apply_workspace_edit(workspace_edit, encoding) end
+  for index, change in ipairs(changes) do
+    if change.kind then
+      vim.lsp.util.apply_workspace_edit({ documentChanges = { change }, changeAnnotations = annotations }, encoding)
+      for _, uri in ipairs { change.uri or change.oldUri, change.newUri } do
+        local file = vim.fs.normalize(vim.uri_to_fname(uri))
+        local buffer = position.buffer_for(file)
+        if buffer then position.refresh(buffer) end
+        before[file] = vim.uv.fs_stat(file)
+      end
+    else
+      vim.lsp.util.apply_text_document_edit(change, index, encoding, annotations)
+    end
+  end
+end
+
 function M.apply(workspace_edit, encoding)
   local files = M.files(workspace_edit)
+  -- During an edit action every buffer was made current with disk before the
+  -- server was asked (nvim-mcp.lsp.disk). One that has changed since --
+  -- reloaded here, or edited and saved by another call meanwhile -- changed
+  -- while the server was computing, and the edit is aimed at the old text:
+  -- applied, it would land at the wrong columns.
+  local moved = {}
   for _, file in ipairs(files) do
     local buffer = position.buffer_for(file)
-    if buffer then position.refresh(buffer) end
+    if buffer then
+      local reloaded = position.refresh(buffer)
+      if disk.ticks and (reloaded or disk.moved(buffer)) then moved[#moved + 1] = file end
+    end
   end
   local dirty = M.modified(files)
   if #dirty > 0 then return { applied = false, reason = "modified", files = dirty } end
+  -- Another session's swap file on a touched file. One whose editor is still
+  -- running with unsaved work refuses the edit: the file is held there, and a
+  -- save would clash with that editor's buffer. One a crashed session left is
+  -- there only because of the crash: the edit goes ahead, and the swap file
+  -- is deleted once the file is saved, or it would later ask about text that
+  -- no longer fits the file.
+  local swaps = disk.elsewhere(files)
+  local held, holding, seen = {}, {}, {}
+  for _, swap in ipairs(swaps) do
+    if swap.running and swap.dirty then
+      held[#held + 1] = { file = swap.file, swap = swap.swap }
+      if not seen[swap.file] then
+        seen[swap.file] = true
+        holding[#holding + 1] = swap.file
+      end
+    end
+  end
+  if #held > 0 then return { applied = false, reason = "swap file", files = holding, swaps = held } end
+  if #moved > 0 then return { applied = false, reason = "changed on disk", files = moved } end
+
+  -- What each file was before the edit, so a save never overwrites a change
+  -- made since (see disk.write).
+  local before = {}
+  for _, file in ipairs(files) do
+    before[file] = vim.uv.fs_stat(file)
+  end
 
   -- Buffers the edit has to open are the edit's, not the human's: saved, then
   -- unlisted, so a rename across thirty files does not leave thirty entries in
   -- their buffer list. Unlisted rather than deleted keeps the undo history.
+  -- One whose save failed stays listed: it holds the edit, unsaved, and the
+  -- human has to be able to find it.
   local was_listed = {}
   for _, file in ipairs(files) do
     local buffer = position.buffer_for(file)
@@ -80,30 +144,44 @@ function M.apply(workspace_edit, encoding)
   -- Applying can fail partway -- a buffer that is not modifiable, a file that
   -- cannot be renamed -- after earlier files were already edited. Those are
   -- still saved and reported, and the reply says the edit was partial, rather
-  -- than an error suggesting nothing happened.
-  local whole, err = pcall(vim.lsp.util.apply_workspace_edit, workspace_edit, encoding)
+  -- than an error suggesting nothing happened. Files it opens are opened
+  -- without a question about a swap file (disk.unasked).
+  local whole, err = disk.unasked(apply_changes, workspace_edit, encoding, before)
 
-  local counts, changed, failed = edit_counts(workspace_edit), {}, {}
+  local counts, changed, failed, saved = edit_counts(workspace_edit), {}, {}, {}
   for _, file in ipairs(files) do
     local buffer = position.buffer_for(file)
     local landed = whole
     if buffer and vim.api.nvim_buf_is_loaded(buffer) then
       if vim.bo[buffer].modified then
         landed = true
-        -- A plain :write, so the human's format-on-save and friends still run.
-        local ok, write_err = pcall(vim.api.nvim_buf_call, buffer, function() vim.cmd "silent write" end)
-        if not ok then failed[#failed + 1] = { file = file, error = tostring(write_err) } end
+        -- A plain :write, so the human's format-on-save and friends still
+        -- run; one that would ask is not made, and is reported instead.
+        local written, why = disk.write(buffer, before[file])
+        if not written then failed[#failed + 1] = { file = file, error = why } end
       end
-      if not was_listed[file] then vim.bo[buffer].buflisted = false end
+      saved[file] = landed and not vim.bo[buffer].modified
+      if not was_listed[file] and not vim.bo[buffer].modified then vim.bo[buffer].buflisted = false end
+      -- The server hears of this change, and computes its next edit from it.
+      disk.settle(buffer)
     end
     if landed and (counts[file] or vim.uv.fs_stat(file)) then
       changed[#changed + 1] = { file = file, edits = counts[file] or 0 }
     end
   end
 
+  -- A crashed session's swap files, on files now saved; see above.
+  local deleted = {}
+  for _, swap in ipairs(swaps) do
+    if not swap.running and saved[swap.file] and os.remove(swap.swap) then
+      deleted[#deleted + 1] = { file = swap.file, swap = swap.swap }
+    end
+  end
+
   local reply = { applied = whole or "partial", changed = changed }
   if not whole then reply.error = tostring(err) end
   if #failed > 0 then reply.failed = failed end
+  if #deleted > 0 then reply.deleted_swaps = deleted end
   return reply
 end
 
@@ -120,6 +198,18 @@ function M.capturing(encoding, fn)
     if result.applied == true then return { applied = true } end
     if result.reason == "modified" then
       return { applied = false, failureReason = "Unsaved changes in " .. table.concat(result.files, ", ") }
+    end
+    if result.reason == "swap file" then
+      return {
+        applied = false,
+        failureReason = "Unsaved work in another editor's swap file: " .. table.concat(result.files, ", "),
+      }
+    end
+    if result.reason == "changed on disk" then
+      return {
+        applied = false,
+        failureReason = "Changed on disk while the edit was computed: " .. table.concat(result.files, ", "),
+      }
     end
     return { applied = false, failureReason = "Applied only partly: " .. tostring(result.error) }
   end

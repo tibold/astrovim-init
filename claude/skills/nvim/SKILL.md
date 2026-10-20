@@ -28,8 +28,8 @@ Do this while talking, not instead of talking.
 ## Which instance
 
 `action: "instances"` returns `{ editors, headless_skipped }`. Each entry in
-`editors` carries its working directory and open files, and the one hosting this
-session is marked `host: true`.
+`editors` carries its address, working directory and open files, and the one
+hosting this session is marked `host: true`.
 
 Only instances with a user interface are listed. A headless Neovim — a test
 runner, a leaked script, a job that outlived its shell — serves RPC and answers
@@ -46,6 +46,7 @@ An editor can be too busy to answer the probe — Roslyn loading a large solutio
 holds it for seconds at a time. Editors announce themselves, so such an editor
 is still listed, as `busy: true` with the directory it works in. Target it by
 its address as usual; a call waits for it, or ask `instances` again shortly.
+One waiting at a prompt is listed as `prompt: true` with its `mode`; see below.
 
 You rarely need it. Omitting `instance` targets the host, which is the right
 editor whenever Claude Code is running in one of its terminal buffers — the
@@ -179,6 +180,37 @@ by the `lsp` skill.
 Refuses a modified buffer and reports `reason: "modified"` — unsaved work is
 theirs. It also rescues any window showing the buffer first, because deleting it
 otherwise closes every such window and takes their layout with it.
+
+## When the editor is waiting on the human
+
+An editor at a prompt — "Press ENTER or type command to continue" after an
+error, or a question such as "Overwrite existing file? (Y)es, [N]o" — takes no
+calls until someone answers it, and only the human can. Any tool call to it
+fails at once, naming the editor by its address (and saying when it is the one
+hosting this session), the prompt and its mode (`r` hit-enter, `rm` more, `r?`
+a question). Two shapes:
+
+- **"… is waiting at … Nothing was sent."** The editor was already at the
+  prompt. Nothing happened.
+- **"… stopped at … while running `<action>`. The call is still running in that
+  editor …"** The prompt came up during the call. It finishes once the human
+  answers, and its result does not come back to you.
+
+A command the human has half typed — `f` waiting for its character, `"` for a
+register, a mapping for its next key — holds calls the same way. The bridge
+waits a few seconds for the key first, so you only hear of one left that way:
+"**… is waiting for the next key of a command the human has half typed …**",
+with "Nothing was sent" or, if it started after the call went out, "**is queued
+behind it**": the call runs once they finish or cancel the command.
+
+Either way, tell the human which editor is waiting and that it needs an answer
+there, then carry on with other work. After they have answered, check what a
+call that was still running or queued did — `state`, or read the files an edit
+touched — before repeating it. Never try to answer the prompt yourself.
+
+If the tool descriptions say the editor's own actions are missing from the
+list, the editor was waiting when the list was made. `describe` with no name
+lists them, and they are all callable as usual.
 
 ## Safety
 

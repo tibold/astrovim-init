@@ -4,14 +4,16 @@
 --- cannot promise.
 ---
 --- Navigation answers with locations. Edits are applied and saved, all or
---- nothing (see nvim-mcp.lsp.edit). Requests block the editor while they run;
---- the notice tells the human why.
+--- nothing (see nvim-mcp.lsp.edit), and computed only once every buffer is
+--- current with disk (nvim-mcp.lsp.disk). Requests block the editor while they
+--- run; the notice tells the human why.
 local mcp = require "nvim-mcp"
 local position = require "nvim-mcp.lsp.position"
 local request = require "nvim-mcp.lsp.request"
 local notice = require "nvim-mcp.lsp.notice"
 local edit = require "nvim-mcp.lsp.edit"
 local ready = require "nvim-mcp.lsp.ready"
+local disk = require "nvim-mcp.lsp.disk"
 
 local M = {}
 
@@ -225,7 +227,7 @@ end
 
 local function files_phrase(count) return ("%d file%s"):format(count, count == 1 and "" or "s") end
 
-function M.rename(args)
+local function rename(args)
   if type(args.new_name) ~= "string" or args.new_name == "" then position.invalid "rename needs new_name" end
   local at = M.locate(args, "textDocument/rename")
   at.params.newName = args.new_name
@@ -248,7 +250,7 @@ function M.rename(args)
 end
 
 --- Format a file, or whole lines `line`..`end_line`.
-function M.format(args)
+local function format(args)
   local buffer = position.buffer(args.path)
   local ms = request.timeout_ms(args)
   local ranged = args.line ~= nil
@@ -345,6 +347,17 @@ local function client_side(command, client)
   }
 end
 
+--- Add what `result`, an edit.apply reply, reports to `reply`: the files it
+--- changed, the ones it could not save, and the swap files it deleted. A
+--- reply that dropped any of them would say an edit landed cleanly when it
+--- did not, or not at all when it partly did.
+local function merge(reply, result)
+  reply.changed = vim.list_extend(reply.changed or {}, result.changed or {})
+  for _, key in ipairs { "failed", "deleted_swaps" } do
+    if result[key] then reply[key] = vim.list_extend(reply[key] or {}, result[key]) end
+  end
+end
+
 --- Run a Command on the server. An edit it sends back goes through
 --- edit.apply; if the server then fails the command, what did or did not land
 --- is still reported, with the server's error alongside.
@@ -370,10 +383,12 @@ function M.run_command(command, client, buffer, ms)
   end)
   for _, result in ipairs(results) do
     if result.applied ~= true then
+      -- Refused, after the edits before it landed.
       result.server_error = failure
+      merge(result, reply)
       return result
     end
-    vim.list_extend(reply.changed, result.changed)
+    merge(reply, result)
   end
   if failure then
     if #reply.changed == 0 then error { code = -32603, message = failure } end
@@ -413,17 +428,17 @@ function M.run_action(action, client, buffer, ms)
       return reply
     end
     if ran.applied ~= true then
-      ran.changed = reply.changed -- the action's own edit did land
+      merge(ran, reply) -- the action's own edit did land
       return ran
     end
-    vim.list_extend(reply.changed, ran.changed)
+    merge(reply, ran)
     reply.timed_out = ran.timed_out
     reply.server_error = ran.server_error
   end
   return reply
 end
 
-function M.code_action(args)
+local function code_action(args)
   if type(args.title) ~= "string" or args.title == "" then
     position.invalid "code_action needs the exact title from code_actions"
   end
@@ -461,6 +476,13 @@ function M.code_action(args)
   end
   return announce(reply, ("Claude applied %q in %s"):format(args.title, files_phrase(#(reply.changed or {}))))
 end
+
+--- The edits, each computed only after every buffer that went stale on disk
+--- has been reloaded and its server told: a server asked first answers for
+--- the old text, and its edit lands at the wrong columns of the new.
+function M.rename(args) return disk.editing(rename, args) end
+function M.format(args) return disk.editing(format, args) end
+function M.code_action(args) return disk.editing(code_action, args) end
 
 local POSITION = {
   path = { type = "string", description = "The file to ask about." },

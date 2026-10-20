@@ -31,6 +31,16 @@ local READY_WAIT = tonumber(vim.env.NVIM_MCP_READY_WAIT) or 60
 local PROBE_MS = 2000
 local SELF = _G.arg and _G.arg[0]
 
+-- How often a call still running asks whether its editor has stopped at a
+-- prompt, and how long a command the human is typing gets to be finished.
+-- See editor().
+local PROMPT_CHECK_MS = 1000
+local TYPING_MS = 3000
+
+--- Milliseconds, for those waits. Not vim.uv.now(): that is the loop's cached
+--- time, stale after the bridge has sat in io.lines() outside the loop.
+local function clock() return vim.uv.hrtime() / 1e6 end
+
 --- In `nvim -l`, print() goes to stderr. Every byte on stdout must be JSON-RPC
 --- or the stream is corrupt, so writes go through here and nowhere else.
 local function send(message)
@@ -42,15 +52,23 @@ local function reply(id, result) send { jsonrpc = "2.0", id = id, result = resul
 local function fail(id, code, message) send { jsonrpc = "2.0", id = id, error = { code = code, message = message } } end
 
 --- Connect and keep the channel per address: reconnecting per request would add
---- a socket round trip to every call.
+--- a socket round trip to every call. `peer` is the same channel's id as the
+--- editor numbers it, which is where it sends its replies (see editor()).
+--- Asked here because nvim_get_api_info is RPC only: Lua inside the editor
+--- cannot learn which channel called it.
 local channels = {}
 local function connect(address)
   if not address or address == "" then return nil end
   if channels[address] then return channels[address] end
   local ok, ch = pcall(vim.fn.sockconnect, "pipe", address, { rpc = true })
   if not ok or ch == 0 then return nil end
-  channels[address] = ch
-  return ch
+  local asked, info = pcall(vim.rpcrequest, ch, "nvim_get_api_info")
+  if not asked or type(info) ~= "table" or type(info[1]) ~= "number" then
+    pcall(vim.fn.chanclose, ch)
+    return nil
+  end
+  channels[address] = { ch = ch, peer = info[1] }
+  return channels[address]
 end
 
 --- Absent an explicit instance, talk to the editor hosting this session. Claude
@@ -58,15 +76,190 @@ end
 --- Claude -- which is why several instances each get a correctly bound bridge.
 local function target(args) return (args and args.instance) or vim.env.NVIM end
 
-local function editor(address, lua, call_args)
-  local ch = connect(address)
-  if not ch then return nil, "no Neovim at " .. tostring(address) end
-  local ok, result = pcall(vim.rpcrequest, ch, "nvim_exec_lua", lua, call_args or {})
-  if not ok then
+--- Why an editor in `mode` (nvim_get_mode's answer) cannot take a call, or nil.
+---
+--- The `r` modes are prompts. A hit-enter prompt reports `blocking` too, and
+--- RPC then goes unanswered. A question -- "Overwrite existing file?",
+--- confirm(), the swap file dialog -- reports mode `r?` with `blocking` false:
+--- Neovim still answers RPC there, but a call already running is stuck behind
+--- the question, and a new one would run nested inside it.
+---
+--- `blocking` in any other mode is a command the human is typing (typing()):
+--- `f` waiting for its character, `"` for its register, `m` for its mark, a
+--- mapping for its next key. No call runs until that key comes, which is
+--- usually a moment away, so editor() waits TYPING_MS before it counts.
+local PROMPTS = {
+  r = 'a hit-enter prompt ("Press ENTER or type command to continue")',
+  rm = "a -- more -- prompt",
+  ["r?"] = "a question that needs an answer",
+}
+local TYPING = "the next key of a command the human has half typed"
+local function prompt(mode)
+  if type(mode) ~= "table" or type(mode.mode) ~= "string" then return nil end
+  if mode.mode:sub(1, 1) == "r" then return PROMPTS[mode.mode] or "a prompt" end
+  if mode.blocking then return TYPING end
+end
+local function typing(mode) return prompt(mode) == TYPING end
+
+local function which(address)
+  return address == vim.env.NVIM and ("Neovim at %s (the editor hosting this session)"):format(address)
+    or ("Neovim at %s"):format(address)
+end
+
+--- Replies sent back by editors, by request id: kept only while the call that
+--- sent the request still waits for it. A reply arriving after its call gave
+--- up -- an action that finished once the human answered a prompt -- is
+--- dropped. The editor delivers it with nvim_exec_lua, which is why this is a
+--- global; it runs re-entrantly, inside whichever wait the bridge is in, so it
+--- only stores.
+local waiting, replies, last_id = {}, {}, 0
+_G.nvim_mcp_reply = function(id, ok, result)
+  if waiting[id] then replies[id] = { ok = ok, result = result } end
+end
+
+--- Set when tools/list could not ask the editor hosting this session for its
+--- actions; see tool_definitions().
+local unlisted = false
+
+--- Runs in the editor: the call, then its result sent back to this bridge as
+--- a notification. Formatted with the request id, the editor's id for this
+--- channel, and the call's Lua; its `...` are the call's arguments. An error
+--- is sent as its message: an error table's own, or it would read "table:
+--- 0x...". A result that cannot be sent (a function in it, say) is replaced by
+--- an error, or the bridge would wait for it forever.
+local RUN = [[
+local id, peer = %d, %d
+local ok, result = pcall(function(...) %s end, ...)
+if not ok then
+  result = type(result) == "table" and result.message ~= nil and tostring(result.message) or tostring(result)
+end
+local REPLY = "return _G.nvim_mcp_reply(...)"
+if not pcall(vim.rpcnotify, peer, "nvim_exec_lua", REPLY, { id, ok, result }) then
+  pcall(vim.rpcnotify, peer, "nvim_exec_lua", REPLY, { id, false, "its result could not be sent back" })
+end]]
+
+--- Run `lua` in the editor at `address`, with `call_args` as its `...`.
+--- Returns its result; or nil and why not, plus `{ prompt = true, mode, why }`
+--- when the editor is waiting on the human. `label` names the call in that
+--- message.
+---
+--- vim.rpcrequest has no timeout, and an editor waiting at a prompt answers no
+--- request, so a request sent to one hangs this bridge and every call queued
+--- behind it -- until Claude Code gives up, half an hour later. So nothing
+--- here waits on the editor except nvim_get_mode, a fast API function that
+--- answers even at a prompt:
+---
+--- - Before sending, the mode is asked. At a prompt, nothing is sent. A
+---   command half typed is waited out for TYPING_MS first, since its next key
+---   is usually a moment away; one left that long counts as a prompt.
+--- - The call goes as a notification, and the editor sends its result back
+---   the same way. Meanwhile the mode is asked about once a second: at a
+---   prompt, the call is given up on at once. It is still running in the
+---   editor, behind the prompt, and finishes when the human answers it. A
+---   command typed halfway once the call was sent holds it before it starts;
+---   it is given up on only once that has lasted TYPING_MS.
+---
+--- The channel is dropped only when it fails. An error raised by the call in
+--- the editor is the call's own, and the next call uses the same channel.
+local function editor(address, lua, call_args, label)
+  local link = connect(address)
+  if not link then return nil, "no Neovim at " .. tostring(address) end
+
+  local function failed()
     channels[address] = nil -- force a reconnect; the editor may have restarted
+    pcall(vim.fn.chanclose, link.ch)
     return nil, "Neovim call failed"
   end
-  return result
+  local function mode()
+    local ok, answer = pcall(vim.rpcrequest, link.ch, "nvim_get_mode")
+    if ok and type(answer) == "table" then return answer end
+  end
+
+  local now = mode()
+  local since = clock()
+  while now and typing(now) and clock() - since < TYPING_MS do
+    vim.wait(50)
+    now = mode()
+  end
+  if not now then return failed() end
+  local why = prompt(now)
+  if why == TYPING then
+    return nil,
+      ("%s is waiting for %s (mode %s). Nothing was sent. Tell the human which editor it is, and call again once they have finished or cancelled that command."):format(
+        which(address),
+        why,
+        now.mode
+      ),
+      { prompt = true, mode = now.mode, why = why }
+  elseif why then
+    return nil,
+      ("%s is waiting at %s (mode %s). Nothing was sent. The human has to answer it in that editor; tell them which editor is waiting, then call again once they have."):format(
+        which(address),
+        why,
+        now.mode
+      ),
+      { prompt = true, mode = now.mode, why = why }
+  end
+
+  last_id = last_id + 1
+  local id = last_id
+  waiting[id] = true
+  if not pcall(vim.rpcnotify, link.ch, "nvim_exec_lua", RUN:format(id, link.peer, lua), call_args or {}) then
+    waiting[id] = nil
+    return failed()
+  end
+
+  local function answered() return replies[id] ~= nil end
+  local typed_since
+  while not answered() do
+    vim.wait(PROMPT_CHECK_MS, answered, 10)
+    if not answered() then
+      now = mode()
+      if not now then
+        waiting[id] = nil
+        return failed()
+      end
+      why = prompt(now)
+      if why == TYPING then
+        typed_since = typed_since or clock()
+        if clock() - typed_since < TYPING_MS then why = nil end
+      else
+        typed_since = nil
+      end
+      -- A result sent just before the prompt came up is already on the
+      -- channel, queued behind the mode's answer: let it in before giving up.
+      if why then vim.wait(50, answered, 5) end
+      if why and not answered() then
+        waiting[id] = nil
+        local call = label and ("`" .. label .. "`") or "the call"
+        local message = why == TYPING
+            and ("%s is waiting for %s (mode %s), and %s is queued behind it: it runs once they finish or cancel that command, and its result will not come back here. Tell the human which editor it is, and once they have, check what the call did before repeating it."):format(
+              which(address),
+              why,
+              now.mode,
+              call
+            )
+          or ("%s stopped at %s (mode %s) while running %s. The call is still running in that editor, behind the prompt, and finishes once the human answers it; its result will not come back here. Tell the human which editor is waiting, and once they have answered, check what the call did before repeating it."):format(
+            which(address),
+            why,
+            now.mode,
+            call
+          )
+        return nil, message, { prompt = true, mode = now.mode, why = why }
+      end
+    end
+  end
+
+  local answer = replies[id]
+  replies[id], waiting[id] = nil, nil
+  if not answer.ok then return nil, "Neovim call failed: " .. tostring(answer.result) end
+  -- The tool list was made while this editor could not be asked for its
+  -- actions. Now it has answered, the client is told to ask for the list again.
+  if unlisted and address == vim.env.NVIM then
+    unlisted = false
+    send { jsonrpc = "2.0", method = "notifications/tools/list_changed" }
+  end
+  return answer.result
 end
 
 --- Probe mode: `nvim -u NONE -l server.lua <address>` writes that instance's
@@ -74,11 +267,18 @@ end
 --- wedged editor is killed by the child's timeout rather than blocking the
 --- sweep. Checked before the JSON-RPC loop at the bottom, which reads stdin and
 --- would otherwise wait forever for input that is never coming.
+---
+--- An editor at a prompt answers with `{ prompt, mode }` and exit code 3.
+local PROBE_PROMPT = 3
 if _G.arg and _G.arg[1] then
-  local info = editor(_G.arg[1], 'return require("nvim-mcp").invoke("identify", {})')
+  local info, _, blocked = editor(_G.arg[1], 'return require("nvim-mcp").invoke("identify", {})', nil, "identify")
   if info and info.ok and info.content and info.content[1] then
     io.stdout:write(info.content[1].text)
     os.exit(0)
+  end
+  if blocked then
+    io.stdout:write(vim.json.encode { prompt = true, mode = blocked.mode })
+    os.exit(PROBE_PROMPT)
   end
   os.exit(1)
 end
@@ -88,7 +288,12 @@ end
 --- from inside an editor at all.
 local function instances()
   local paths = {}
-  if vim.fn.has "win32" == 1 then
+  if vim.env.NVIM_MCP_SCAN == "0" then
+    -- For the tests: they probe only the editors they announce themselves, in
+    -- records of their own (NVIM_MCP_INSTANCES), and must never send anything
+    -- to the human's.
+    paths = {}
+  elseif vim.fn.has "win32" == 1 then
     -- Forward slashes, because the globber reads backslashes as escapes and
     -- the literal [[\\.\pipe\*]] therefore matches nothing at all -- which is
     -- what this action used to do on Windows.
@@ -154,8 +359,11 @@ local function instances()
   -- no record that stays silent is not an editor at all -- Claude's own bridge
   -- processes, blocked on stdin, look exactly like that.
   local announced = {}
-  local records = vim.env.NVIM_MCP_INSTANCES or vim.fs.joinpath(vim.fn.stdpath "state", "nvim-mcp", "instances")
-  for _, file in ipairs(vim.fn.glob(records .. "/*.json", true, true)) do
+  local records = vim.env.NVIM_MCP_INSTANCES
+  if not records and vim.env.NVIM_MCP_SCAN ~= "0" then
+    records = vim.fs.joinpath(vim.fn.stdpath "state", "nvim-mcp", "instances")
+  end
+  for _, file in ipairs(records and vim.fn.glob(records .. "/*.json", true, true) or {}) do
     local ok, record = pcall(function() return vim.json.decode(table.concat(vim.fn.readfile(file), "")) end)
     if ok and type(record) == "table" and record.address and record.pid then
       -- Signal 0 only asks whether the process exists; a crashed editor never
@@ -202,6 +410,17 @@ local function instances()
           info = decoded,
         }
       end
+    elseif result.code == PROBE_PROMPT and ok and type(decoded) == "table" and announced[job.address] then
+      -- Waiting at a prompt: it answered the probe's mode check, but takes no
+      -- calls until the human answers it. Listed like a busy one, under the
+      -- same rule: only with a record, since nothing else says it has a UI.
+      found[#found + 1] = {
+        address = job.address,
+        host = job.address == vim.env.NVIM,
+        prompt = true,
+        mode = decoded.mode,
+        info = { cwd = announced[job.address].cwd },
+      }
     elseif result.code == 124 and announced[job.address] then
       -- vim.system's code for a timeout: an announced editor too busy to
       -- answer -- Roslyn loading a large solution holds the main loop for
@@ -308,7 +527,22 @@ end
 local function tool_definitions()
   -- listed(), not specs(): actions registered as hidden stay reachable through
   -- `search` without costing context in every session.
-  local listed = editor(vim.env.NVIM, 'return require("nvim-mcp").listed()') or {}
+  unlisted = false
+  local listed, err, blocked = editor(vim.env.NVIM, 'return require("nvim-mcp").listed()')
+  -- An editor that cannot be asked -- at a prompt, say -- has its actions left
+  -- out. The client keeps this list for the whole session, so each
+  -- description says so, and the client is told to list the tools again once
+  -- a call reaches that editor (editor()).
+  local missing
+  if not listed then
+    listed = {}
+    if vim.env.NVIM and vim.env.NVIM ~= "" then
+      unlisted = true
+      missing = ("The editor's own actions are missing from this list: it could not be asked when the list was made (%s). describe with no name lists them, and the list is sent again once the editor answers."):format(
+        blocked and ("%s, in mode %s"):format(blocked.why, blocked.mode) or err or "no answer"
+      )
+    end
+  end
 
   local definitions = {}
   for _, tool in ipairs(TOOLS) do
@@ -324,15 +558,13 @@ local function tool_definitions()
     end
     vim.list_extend(names, tool.bridge)
 
+    local description = { tool.preamble, "", "actions: " .. table.concat(names, ", ") }
+    if missing then vim.list_extend(description, { "", missing }) end
+    vim.list_extend(description, { "", tool.epilogue })
+
     definitions[#definitions + 1] = {
       name = tool.name,
-      description = table.concat({
-        tool.preamble,
-        "",
-        "actions: " .. table.concat(names, ", "),
-        "",
-        tool.epilogue,
-      }, "\n"),
+      description = table.concat(description, "\n"),
       inputSchema = {
         type = "object",
         properties = {
@@ -356,7 +588,9 @@ local handlers = {}
 handlers["initialize"] = function(id)
   reply(id, {
     protocolVersion = PROTOCOL_VERSION,
-    capabilities = { tools = vim.empty_dict() },
+    -- listChanged: the list is sent again once an editor that could not be
+    -- asked for it answers (tool_definitions()).
+    capabilities = { tools = { listChanged = true } },
     serverInfo = { name = "editor", version = "0.1.0" },
   })
 end
@@ -386,13 +620,13 @@ handlers["tools/call"] = function(id, params)
 
   local address = target(args)
   if bridged and action == "search" then
-    local found, err = editor(address, 'return require("nvim-mcp").search(...)', { args.query, args.limit })
+    local found, err = editor(address, 'return require("nvim-mcp").search(...)', { args.query, args.limit }, "search")
     if not found then return fail(id, -32603, err or "search failed") end
     return text(found)
   end
 
   if bridged and action == "describe" then
-    local spec, err = editor(address, 'return require("nvim-mcp").describe(...)', { args.name, tool.name })
+    local spec, err = editor(address, 'return require("nvim-mcp").describe(...)', { args.name, tool.name }, "describe")
     if not spec then return fail(id, -32603, err or "describe failed") end
     return text(spec)
   end
@@ -417,7 +651,8 @@ handlers["tools/call"] = function(id, params)
   local deadline = os.time() + timeout
   local ready_deadline = os.time() + READY_WAIT
   while true do
-    local result, err = editor(address, 'return require("nvim-mcp").invoke(...)', { action, args, opts, tool.name })
+    local result, err =
+      editor(address, 'return require("nvim-mcp").invoke(...)', { action, args, opts, tool.name }, action)
     if not result then return fail(id, -32603, err or "Neovim is not reachable") end
     if not result.ok then return fail(id, -32603, result.message or "Action failed") end
 

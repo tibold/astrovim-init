@@ -105,6 +105,64 @@ describe("edit.apply", function()
     assert.are.equal(1, #reply.failed)
     assert.are.equal(vim.fs.normalize(locked), vim.fs.normalize(reply.failed[1].file))
   end)
+
+  it("leaves a buffer it opened listed when its save was refused, so the edit can be found", function()
+    local path = fake.file { "local foo = 1" }
+    vim.uv.fs_chmod(path, tonumber("444", 8))
+    local reply = edit.apply({ changes = rename_in(path, 0, 6, 9, "bar") }, "utf-16")
+    vim.uv.fs_chmod(path, tonumber("644", 8))
+    assert.are.equal(1, #(reply.failed or {}), vim.inspect(reply))
+    local buffer = position.buffer_for(path)
+    assert.is_true(vim.bo[buffer].modified)
+    assert.is_true(vim.bo[buffer].buflisted)
+    vim.api.nvim_buf_delete(buffer, { force = true })
+  end)
+
+  it("applies text edits to a file the same edit created over an existing one", function()
+    -- The server computed the text edit for the empty file it asked for.
+    local path = fake.file { "old" }
+    local buffer = open_listed(path)
+    local uri = vim.uri_from_fname(path)
+    local reply = edit.apply({
+      documentChanges = {
+        { kind = "create", uri = uri, options = { overwrite = true } },
+        {
+          textDocument = { uri = uri, version = vim.NIL },
+          edits = { { range = fake.range(0, 0, 0), newText = "fresh" } },
+        },
+      },
+    }, "utf-16")
+    assert.is_true(reply.applied, vim.inspect(reply))
+    assert.is_nil(reply.failed)
+    assert.are.same({ "fresh" }, vim.fn.readfile(path))
+    assert.are.same({ "fresh" }, vim.api.nvim_buf_get_lines(buffer, 0, -1, false))
+    assert.is_false(vim.bo[buffer].modified)
+  end)
+
+  it("applies two edits to one document in an edit that also creates a file", function()
+    -- Both carry the version the server saw. Only the first is checked:
+    -- the second would otherwise read as computed for an older document.
+    local path, dir = fake.file { "local foo = 1" }
+    local buffer = open_listed(path)
+    -- Versions are kept for a buffer a server is attached to, from its first
+    -- change on.
+    fake.start(buffer, dir, { capabilities = { textDocumentSync = fake.FULL_SYNC } })
+    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "local foo = 1" })
+    vim.api.nvim_buf_call(buffer, function() vim.cmd "silent write" end)
+    local document = { uri = vim.uri_from_fname(path), version = vim.lsp.util.buf_versions[buffer] }
+    assert.is_true(document.version > 0)
+    local reply = edit.apply({
+      documentChanges = {
+        { kind = "create", uri = vim.uri_from_fname(dir .. "/new.txt") },
+        { textDocument = document, edits = { { range = fake.range(0, 6, 9), newText = "bar" } } },
+        { textDocument = document, edits = { { range = fake.range(0, 0, 5), newText = "const" } } },
+      },
+    }, "utf-16")
+    fake.stop_all()
+    assert.is_true(reply.applied, vim.inspect(reply))
+    assert.are.same({ "const bar = 1" }, vim.fn.readfile(path))
+    assert.is_truthy(vim.uv.fs_stat(dir .. "/new.txt"))
+  end)
 end)
 
 describe("edit.capturing", function()

@@ -146,6 +146,41 @@ describe("code action commands that go wrong", function()
     return path, buffer
   end
 
+  it("reports a save that failed for an edit the server sent back while running its command", function()
+    local path, buffer = offering(
+      function() return { title = "Fill it", command = { title = "Fill it", command = "fill" } } end,
+      function(change, dispatchers)
+        dispatchers.server_request("workspace/applyEdit", { edit = change(0, 6, 9, "bar") })
+        return vim.NIL
+      end
+    )
+    vim.bo[buffer].readonly = true
+    local reply = lsp.code_action { path = path, line = 1, title = "Fill it" }
+    assert.is_true(reply.applied, vim.inspect(reply))
+    assert.are.equal(1, #(reply.failed or {}), vim.inspect(reply))
+    assert.matches("^E45:", reply.failed[1].error)
+    assert.are.same({ "local foo = 1", "print(foo)" }, vim.fn.readfile(path))
+  end)
+
+  it("still reports what landed when the server's next edit is refused", function()
+    local path, buffer
+    path, buffer = offering(
+      function() return { title = "Fill it", command = { title = "Fill it", command = "fill" } } end,
+      function(change, dispatchers)
+        dispatchers.server_request("workspace/applyEdit", { edit = change(0, 6, 9, "bar") })
+        -- The human types meanwhile: the next edit finds unsaved work.
+        vim.api.nvim_buf_set_lines(buffer, 1, 2, false, { "print(bar) -- mine" })
+        dispatchers.server_request("workspace/applyEdit", { edit = change(1, 6, 9, "bar") })
+        return vim.NIL
+      end
+    )
+    local reply = lsp.code_action { path = path, line = 1, title = "Fill it" }
+    assert.is_false(reply.applied, vim.inspect(reply))
+    assert.are.equal("modified", reply.reason)
+    assert.are.same({ vim.fs.normalize(path) }, vim.tbl_map(function(c) return c.file end, reply.changed or {}))
+    assert.are.same({ "local bar = 1", "print(foo)" }, vim.fn.readfile(path))
+  end)
+
   it("does not run a client-side command, and says the human is needed", function()
     -- roslyn.nvim's "Fix all" opens a picker in the human's editor and applies
     -- whatever they choose, unsaved: nothing this action could report on.

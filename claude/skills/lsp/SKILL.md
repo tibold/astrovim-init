@@ -82,14 +82,35 @@ reply is `{ applied: false, reason: "modified", files }`. That work is the
 human's. Tell them which files, and ask them to save or discard; never try to
 get around it.
 
+**Edits are computed from what is on disk.** Files you changed with Edit, or
+a script or git did, are reloaded into their (unmodified) buffers before the
+server is asked, so its edit fits the current text; `reloaded` in the reply
+lists them. Nothing to do about it — it just means editing a file with Edit
+and then renaming in it is safe.
+
 Code actions: call `code_actions` on `lsp` first, then `code_action` on
 `lsp_edit` with the exact `title`. The list is fetched fresh each time and matched by title, so an index
 from an earlier list cannot apply the wrong fix; `index` only chooses between
 duplicate titles. Some actions run a server command whose edit arrives
 separately — the reply still lists what changed, and says so when nothing did.
 
-Three other replies to recognise:
+Other replies to recognise:
 
+- **`reason: "swap file"`** with `swaps: [{ file, swap }]` — another editor,
+  still running, has unsaved work in that file, so nothing was applied. Tell
+  the human which file; they save or discard it in that editor, then call
+  again. Never delete that swap file: the other editor holds it. Lookups are
+  not affected.
+- **`deleted_swaps: [{ file, swap }]`** beside `applied: true` — a Neovim that
+  crashed had left a swap file on that file; the edit went ahead and deleted
+  it, its unsaved text with it. Mention it in passing.
+- **`reason: "changed on disk"`** with `files` — a file changed while the
+  server was computing the edit (on disk, or edited and saved by something
+  else), so nothing was applied. Call again.
+- **`failed: [{ file, error }]`** beside `applied: true` — the edit is in those
+  buffers but they were not saved, because saving would have asked the human
+  (a readonly buffer, say, or a file changed since the edit began). They stay
+  in the human's buffer list. Tell them which files are left unsaved and why.
 - **`reason: "client command"`** — the action runs inside the editor (a picker,
   say) and was not run. Ask the human to apply it themselves.
 - **`applied: "partial"`** with `error` — applying failed partway (a buffer
@@ -121,3 +142,9 @@ Requests are synchronous: while one runs, the human's Neovim does not respond,
 and a small `Claude · LSP …` notice in the corner says why. Most answer in
 milliseconds. Use the actions as freely as you need; this is a known trade,
 and if it bites, the fix belongs in the bridge rather than in fewer calls.
+
+An editor waiting at a prompt ("Press ENTER", a question) fails every call at
+once with an error naming the editor and the prompt; the `nvim` skill covers
+it. Tell the human which editor is waiting. If the error says an edit was
+**still running** there, it may have landed once they answered: read the
+files before calling it again.

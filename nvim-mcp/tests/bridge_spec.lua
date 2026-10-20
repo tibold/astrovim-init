@@ -182,7 +182,7 @@ describe("bridge", function()
     local reply = exchange(
       { { method = "tools/call", params = { name = "drive", arguments = { action = "instances" } } } },
       nil,
-      { NVIM_MCP_INSTANCES = records }
+      { NVIM_MCP_INSTANCES = records, NVIM_MCP_SCAN = "0" }
     )[1]
     busy:kill(9)
     local listed = vim.json.decode(reply.result.content[1].text)
@@ -194,6 +194,88 @@ describe("bridge", function()
     assert.is_true(found.busy)
     assert.are.equal("C:/work/big", found.info.cwd)
     assert.is_nil(vim.uv.fs_stat(records .. "/stale.json"), "the stale record was not removed")
+  end)
+
+  it("fails a call whose result cannot be sent back, rather than wait for it", function()
+    mcp.register {
+      name = "unsendable",
+      description = "Returns a function.",
+      handler = function()
+        return { content = { { type = "text", text = "x", extra = function() end } } }
+      end,
+    }
+    local reply =
+      exchange({ { method = "tools/call", params = { name = "drive", arguments = { action = "unsendable" } } } })[1]
+    assert.is_truthy(reply and reply.error, vim.inspect(reply))
+    assert.matches("could not be sent back", reply.error.message)
+  end)
+
+  it("reports an error raised in the editor by its message, and keeps the channel", function()
+    -- An editor whose registry raises, as one would mid-reload: the error
+    -- belongs to the call, and the connection is still good.
+    local address = [[\\.\pipe\nvim-mcp-raises-]] .. vim.fn.getpid()
+    if vim.fn.has "win32" == 0 then address = vim.fn.tempname() .. ".sock" end
+    local other = vim.system { "nvim", "--headless", "-u", "NONE", "-i", "NONE", "--listen", address }
+    local ch
+    vim.wait(5000, function()
+      local ok, connected = pcall(vim.fn.sockconnect, "pipe", address, { rpc = true })
+      if ok and connected ~= 0 then ch = connected end
+      return ch ~= nil
+    end, 50)
+    assert.is_truthy(ch, "the other editor never started")
+    vim.rpcrequest(
+      ch,
+      "nvim_exec_lua",
+      [[
+      vim.g.opened = 0
+      vim.api.nvim_create_autocmd("ChanOpen", { callback = function() vim.g.opened = vim.g.opened + 1 end })
+      package.loaded["nvim-mcp"] = {
+        invoke = function() error { code = -32603, message = "the registry broke" } end,
+      }
+    ]],
+      {}
+    )
+
+    local target = dofile(here .. "/target.lua")
+    local through = target.bridge(address)
+    local first = through.call("drive", { action = "echo" })
+    local second = through.call("drive", { action = "echo" })
+    local opened = vim.rpcrequest(ch, "nvim_get_var", "opened")
+    through.close()
+    pcall(vim.fn.chanclose, ch)
+    other:kill(9)
+
+    assert.is_truthy(first and first.error, vim.inspect(first))
+    assert.matches("the registry broke", first.error.message)
+    assert.is_nil(first.error.message:find("table: ", 1, true))
+    assert.is_truthy(second and second.error, vim.inspect(second))
+    assert.are.equal(1, opened, "the bridge reconnected after the error")
+  end)
+
+  it("probes no announced editor with NVIM_MCP_SCAN=0 unless the test named the records", function()
+    -- The human's records live under stdpath("state"): pointed somewhere
+    -- else, it holds a record of this very instance.
+    mcp.register { name = "identify", description = "Who.", handler = function() return { cwd = "announced" } end }
+    local state = vim.fs.normalize(vim.fn.tempname())
+    local address = vim.fn.serverstart()
+    for _, app in ipairs { "nvim-data", "nvim" } do
+      local records = state .. "/" .. app .. "/nvim-mcp/instances"
+      vim.fn.mkdir(records, "p")
+      vim.fn.writefile(
+        { vim.json.encode { address = address, pid = vim.fn.getpid(), cwd = "announced" } },
+        records .. "/me.json"
+      )
+    end
+
+    local reply = exchange(
+      { { method = "tools/call", params = { name = "drive", arguments = { action = "instances" } } } },
+      nil,
+      { NVIM_MCP_SCAN = "0", XDG_STATE_HOME = state }
+    )[1]
+    vim.fn.serverstop(address)
+    local listed = vim.json.decode(reply.result.content[1].text)
+    assert.are.same({}, listed.editors)
+    assert.are.equal(0, listed.headless_skipped)
   end)
 
   it("leaves an absolute path alone", function()

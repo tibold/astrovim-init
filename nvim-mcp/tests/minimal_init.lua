@@ -10,4 +10,10 @@ vim.opt.rtp:append(root)
 -- Test instances must not share the human's ShaDa: their running editor holds
 -- it, and a reload in a test (checktime) then fails with E886.
 vim.o.shadafile = "NONE"
+-- Nor its swap directory: a test editor that is killed leaves its swap files
+-- behind there, where the human's editors then ask about them, and the swap
+-- checks (nvim-mcp.lsp.disk) would read theirs.
+local swap = vim.fn.tempname()
+vim.fn.mkdir(swap, "p")
+vim.o.directory = swap .. "//"
 vim.cmd "runtime plugin/plenary.vim"

@@ -41,6 +41,38 @@ the case where a *different* worktree is the target.
 The bridge holds no state and knows no actions. `tools/call` is forwarded into the
 editor, so an action registered at runtime is reachable without restarting either side.
 
+### An editor waiting on the human
+
+A request sent to an editor at a prompt — "Press ENTER", a question such as
+"Overwrite existing file?" — is never answered, and `vim.rpcrequest` has no timeout:
+the bridge, and every call queued behind it, would wait until Claude Code gives up half
+an hour later. So the bridge never waits on the editor except through `nvim_get_mode`,
+a fast API function that answers even at a prompt:
+
+- **Before each call it asks for the mode.** At a prompt, the call fails at once and
+  says which editor is waiting, at what, and that nothing was sent.
+- **The call itself is an RPC notification** (`nvim_exec_lua`). Its code runs the call
+  and sends the result back the same way, to the bridge's channel id, which the bridge
+  learns from `nvim_get_api_info` when it connects (that function is RPC only, so the
+  editor cannot ask it). Meanwhile the bridge asks for the mode about once a second;
+  if the editor has stopped at a prompt, the call fails at once and says the call is
+  still running there and finishes once the human answers. Its late reply is dropped.
+
+A prompt is mode `r`, `rm` or `r?`. `blocking` alone misses questions: they report `r?`
+with `blocking` false, because Neovim still services RPC while it asks. `blocking` in
+any other mode is a command the human is typing — `f` waiting for its character, `"`
+its register, `m` its mark, `<C-w>` or a mapping its next key — which holds every call
+until that key comes. The bridge waits up to 3 s for it, then fails the call saying a
+command is half typed (before sending, nothing was sent; after, the call is queued
+behind it).
+`instances` lists an announced editor found at a prompt as `prompt: true`, beside `busy`.
+
+An error raised by the call in the editor fails that call only; the channel stays up.
+A `tools/list` made while the hosting editor cannot be asked says so in each tool's
+description, and the bridge sends `notifications/tools/list_changed` once a call
+reaches that editor again.
+Design: `../docs/superpowers/specs/2026-10-10-bridge-prompts-design.md`.
+
 ### Sideload fallback
 
 `nvim-mcp.config` generates an `--mcp-config` file pointing at the same bridge, for
@@ -259,9 +291,34 @@ neotest's async client.
   lookups anyway, marked `loading`; edits refuse. `ContentModified` counts as
   not ready.
 - **Edits are applied and saved, all or nothing.** A touched buffer with
-  unsaved changes refuses the whole edit. Buffers an edit had to open are
-  unlisted again afterwards. Edits a server sends back while running a command
-  (`workspace/applyEdit`) are captured and follow the same rules.
+  unsaved changes refuses the whole edit, and so does a touched file another
+  running editor has unsaved work in, found from its swap file (`reason:
+  "swap file"`). A swap file a crashed Neovim left is deleted once the edit
+  has saved its file (`deleted_swaps`). No action asks about a swap file when
+  it opens a file. A code action's reply carries what every edit it applied
+  reports — `changed`, `failed`, `deleted_swaps` — including the edits before
+  one that was refused. Buffers an edit had to open are
+  unlisted again once saved; one left unsaved stays listed, where the human can
+  find it. Edits a server sends back while running a command
+  (`workspace/applyEdit`) are captured and follow the same rules. A file the
+  edit itself creates over an existing one is read again before its text edits
+  land.
+- **Edits are computed from what is on disk.** Before an edit asks its server,
+  every loaded, unmodified buffer whose file changed behind it is reloaded, and
+  the server is sent the new text (`reloaded` in the reply, once, even when the
+  bridge had to retry). A server asked first answers for the old text, and its
+  edit lands at the wrong columns. A rewrite with the same text is no change. A
+  buffer Neovim took for a new file whose file has since appeared is read with
+  `:edit!`, since `:checktime` would ask; a swap file a crashed session left is
+  answered "edit anyway" and kept. A touched buffer that changes while the
+  server computes — reloaded, or edited and saved by another call — refuses the
+  edit (`reason: "changed on disk"`). A file whose stat has not moved since it
+  was last found current is not looked at again. Implemented in
+  `nvim-mcp.lsp.disk`.
+- **Saving never asks.** `'confirm'` is off while an edit writes, so a refusal
+  (a readonly buffer, a file that appeared) is an error, and a file changed
+  since the edit began is not overwritten; either way the file is listed in
+  `failed`, its buffer holding the edit unsaved.
 
 Design: `../docs/superpowers/specs/2026-09-27-lsp-actions-design.md`.
 
@@ -273,12 +330,21 @@ nvim --headless -u tests/minimal_init.lua \
   -c "PlenaryBustedDirectory tests/ { minimal_init = 'tests/minimal_init.lua' }"
 ```
 
-189 tests covering registration, validation, ordering, invocation, hidden actions,
+254 tests covering registration, validation, ordering, invocation, hidden actions,
 the tool each action is on, readiness, quickfix, neotest results, debugging, search, the ported editor actions, config generation, and the LSP actions against
 an in-process fake language server (`tests/fake_lsp.lua`), and the bridge driven
 over real JSON-RPC (`tests/bridge_spec.lua`).
 The protocol itself is verified by driving the bridge with real JSON-RPC and by a real
 `claude` session, rather than mocked.
+
+Prompts need a UI: without one, Neovim answers its own questions with their
+default and never shows "Press ENTER". `tests/target.lua` starts an editor of the
+test's own in a pseudo-terminal, so it runs the real TUI, and drives it over RPC;
+`bridge_prompt_spec.lua` and part of `lsp_disk_spec.lua` use it. The bridge in
+tests runs with `NVIM_MCP_SCAN=0`, so `instances` probes only editors the test
+announced, in records of its own under `NVIM_MCP_INSTANCES` (none without it),
+and never the human's own. Test editors keep their swap files in a directory
+of their own, not the human's.
 
 Those run on Windows, so the unix half of `claude/server.lua` needs its own harness:
 
