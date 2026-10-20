@@ -1,5 +1,3 @@
-if true then return {} end -- WARN: REMOVE THIS LINE TO ACTIVATE THIS FILE
-
 -- AstroUI provides the basis for configuring the AstroNvim User Interface
 -- Configuration documentation can be found with `:h astroui`
 -- NOTE: We highly recommend setting up the Lua Language Server (`:LspInstall lua_ls`)
@@ -18,7 +16,11 @@ return {
         -- Normal = { bg = "#000000" },
       },
       astrodark = { -- a table of overrides/changes when applying the astrotheme theme
-        -- Normal = { bg = "#000000" },
+        -- Info and hints get a dotted underline in their own colour, 40% of
+        -- the way from the background, instead of a bright undercurl:
+        -- enough to see something is there without it reading as a warning
+        DiagnosticUnderlineInfo = { underdotted = true, sp = "#305372" },
+        DiagnosticUnderlineHint = { underdotted = true, sp = "#105952" },
       },
     },
     -- Icons can be configured throughout the interface

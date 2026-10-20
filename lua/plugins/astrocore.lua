@@ -37,7 +37,9 @@ return {
     },
     -- Diagnostics configuration (for vim.diagnostics.config({...})) when diagnostics are on
     diagnostics = {
-      virtual_text = true,
+      -- Info and hints are suggestions, not problems: they keep a faint
+      -- underline (lua/plugins/astroui.lua) and the sign, but no inline text
+      virtual_text = { severity = { min = vim.diagnostic.severity.WARN } },
       underline = true,
     },
     -- vim options can be configured here
