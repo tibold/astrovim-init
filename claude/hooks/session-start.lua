@@ -60,7 +60,7 @@ if _G.arg and _G.arg[1] == "--checklist" then
     "nvim_exec_lua",
     [[
       local window = package.loaded["checklist.window"]
-      return window and window.markdown() or ""
+      return window and window.markdown { ids = true } or ""
     ]],
     {}
   )
@@ -107,21 +107,25 @@ local lines = {
   "plan becomes clearer, move things with `index` rather than leaving a log of",
   "the order they came up in. Batch a turn's changes into one call.",
   "",
-  "Write-only: never read it back or report on it.",
+  "Items arrive one at a time, so the panel drifts. Now and then — moving to a",
+  "new strand of work, or once it has grown a lot — read it back with the",
+  "`checklist` action and tidy it in one call. Never report it to the human.",
   "",
   "The `checklist` skill has the contract and grouping rules.",
 }
 
 -- Compaction is exactly when the plan is lost, and it is also when this hook
--- fires, so the panel is handed over rather than merely pointed at. This is the
--- one time the checklist is read: pushed once, at a bounded cost, never pulled
--- mid-conversation.
+-- fires, so the panel is handed over rather than merely pointed at: pushed
+-- once, at a bounded cost. Mid-conversation the agent reads it back only to
+-- tidy it. The ids come with it, or a compacted agent adds again what is
+-- already there instead of updating it.
 local current = checklist()
 if current then
   vim.list_extend(lines, {
     "",
-    "It currently holds the following. Treat this as your plan and carry on from",
-    "it; do not report it back to the human, who is looking at it.",
+    "It currently holds the following, each item's id in backticks. Treat this as",
+    "your plan and carry on from it, updating those ids rather than adding the",
+    "items again; do not report it back to the human, who is looking at it.",
     "",
     current,
   })

@@ -111,9 +111,12 @@ end
 
 --- The checklist as markdown. Pure, so it serves both the yank keymap and the
 --- SessionStart hook, which reads it over RPC to put the current plan back in
---- front of an agent that has just been compacted.
+--- front of an agent that has just been compacted. `opts.ids` puts each item's
+--- id after its mark, for an agent that is to update and tidy the items rather
+--- than add them again.
+---@param opts? { ids: boolean? }
 ---@return string
-function M.markdown()
+function M.markdown(opts)
   local out, current = {}, nil
   local marks = { todo = "- [ ] ", inprogress = "- [>] ", done = "- [x] ", blocked = "- [!] " }
   for _, id in ipairs(state.order) do
@@ -125,7 +128,10 @@ function M.markdown()
         out[#out + 1] = "## " .. current
       end
     end
-    out[#out + 1] = (marks[item.state] or marks.todo) .. item.text .. (item.note and ("  — " .. item.note) or "")
+    out[#out + 1] = (marks[item.state] or marks.todo)
+      .. (opts and opts.ids and ("`" .. id .. "` ") or "")
+      .. item.text
+      .. (item.note and ("  — " .. item.note) or "")
   end
   return table.concat(out, "\n")
 end

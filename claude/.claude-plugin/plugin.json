@@ -1,6 +1,6 @@
 {
   "name": "nvim",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Drive a running Neovim from Claude Code, use its language servers to navigate and refactor, drive its debugger, keep the human's checklist panel in step with your plan, and tell them when Claude is waiting on them.",
   "author": {
     "name": "Tibold Kandrai"

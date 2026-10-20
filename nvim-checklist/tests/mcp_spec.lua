@@ -30,10 +30,54 @@ describe("mcp tool", function()
   it("keeps its description short, because the contract lives in the skill", function()
     -- A tool description costs ~600 tokens of permanent context; a skill costs
     -- ~140 for its index line and loads the rest only when relevant.
-    local description = mcp.tool.description
-    assert.is_true(#description < 250, ("description is %d chars"):format(#description))
-    assert.is_true(description:find "Write%-only" ~= nil)
-    assert.is_true(description:find("never read it back", 1, true) ~= nil)
+    for _, tool in ipairs { mcp.tool, mcp.read_tool } do
+      local description = tool.description
+      assert.is_true(#description < 250, ("%s description is %d chars"):format(tool.name, #description))
+      assert.is_true(description:find("tidy", 1, true) ~= nil, tool.name .. " does not say reading is for tidying")
+    end
+  end)
+
+  it("has a read action, shaped the way nvim-mcp's register expects", function()
+    assert.are.equal("checklist", mcp.read_tool.name)
+    assert.are.equal("function", type(mcp.read_tool.handler))
+    assert.are.equal("object", mcp.read_tool.inputSchema.type)
+  end)
+
+  it("reads the panel back with each item's id, for tidying it", function()
+    mcp.tool.handler {
+      ops = {
+        { op = "set", id = "loose", text = "Loose one" },
+        { op = "set", id = "a", text = "From Claude", group = "Build", state = "inprogress" },
+        { op = "set", id = "b", text = "Blocked one", group = "Build", state = "blocked", note = "waiting" },
+        { op = "set", id = "c", text = "Done one", group = "Verify", state = "done" },
+      },
+    }
+    assert.are.equal(
+      table.concat({
+        "- [ ] `loose` Loose one",
+        "",
+        "## Build",
+        "- [>] `a` From Claude",
+        "- [!] `b` Blocked one  — waiting",
+        "",
+        "## Verify",
+        "- [x] `c` Done one",
+      }, "\n"),
+      mcp.read_tool.handler {}
+    )
+  end)
+
+  it(
+    "says so when the panel is empty",
+    function() assert.are.equal("The checklist is empty.", mcp.read_tool.handler {}) end
+  )
+
+  it("reads back a checklist saved by the last session", function()
+    state.set("kept", { text = "From last time", group = "G" })
+    persist.save()
+    state.reset()
+    persist.restored = false
+    assert.are.equal("\n## G\n- [ ] `kept` From last time", mcp.read_tool.handler {})
   end)
 
   --- Read a file from the repository root, or fail the test naming the path.
@@ -50,9 +94,10 @@ describe("mcp tool", function()
 
   it("has the full contract in the checklist skill", function()
     local text = read_repo_file "claude/skills/checklist/SKILL.md"
-    for _, phrase in ipairs { "Write-only", "read it back", "sweep", "stable slug", "group" } do
+    for _, phrase in ipairs { "## Maintenance", '"checklist"', "sweep", "stable slug", "group" } do
       assert.is_true(text:find(phrase, 1, true) ~= nil, "skill is missing: " .. phrase)
     end
+    assert.is_nil(text:find("Never read it back", 1, true), "skill still forbids reading it back")
   end)
 
   it("tells both the skill and the hook to defer rather than drop", function()
@@ -89,8 +134,14 @@ describe("mcp tool", function()
 
     local script = read_repo_file "claude/hooks/session-start.lua"
     -- Compaction is when the plan is lost and also when this fires, so the hook
-    -- hands the panel over rather than only pointing at it.
-    assert.is_true(script:find("window.markdown()", 1, true) ~= nil, "hook does not read the panel")
+    -- hands the panel over rather than only pointing at it -- with the ids, or
+    -- the agent re-adds what is already there instead of updating it.
+    assert.is_true(
+      script:find("window.markdown { ids = true }", 1, true) ~= nil,
+      "hook does not read the panel with ids"
+    )
+    assert.is_nil(script:find("never read it back", 1, true), "hook still forbids reading it back")
+    assert.is_true(script:find("tidy", 1, true) ~= nil, "hook does not say when to read it back")
 
     -- The address must reach the child as an argument. A vim.system child that
     -- reads vim.env.NVIM itself and then issues an rpcrequest deadlocks: it
@@ -145,6 +196,22 @@ describe("mcp tool", function()
       end
     )
     assert.are.same({ "keep" }, state.order)
+  end)
+
+  it("registers both actions with nvim-mcp when it is there", function()
+    -- nvim-mcp is not on this runtimepath; its register() is the boundary.
+    local registered = {}
+    package.loaded["nvim-mcp"] = {
+      register = function(tool)
+        registered[#registered + 1] = tool.name
+        return true
+      end,
+    }
+    local ok, attached = pcall(mcp.attach)
+    package.loaded["nvim-mcp"] = nil
+    assert.is_true(ok, attached)
+    assert.is_true(attached)
+    assert.are.same({ "checklist_update", "checklist" }, registered)
   end)
 
   it("reports no attachment when nvim-mcp is absent", function()

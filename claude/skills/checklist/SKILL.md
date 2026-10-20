@@ -1,12 +1,13 @@
 ---
 name: checklist
-description: Use as soon as any work or discussion is under way, and again on every turn that changes what is open — mirror the state of the conversation into the human's Neovim checklist panel so they can see what is agreed, in progress, finished, blocked or deferred without reading back through the transcript. Covers the update contract, grouping, deferring, and when to clear.
+description: Use as soon as any work or discussion is under way, and again on every turn that changes what is open — mirror the state of the conversation into the human's Neovim checklist panel so they can see what is agreed, in progress, finished, blocked or deferred without reading back through the transcript. Covers the update contract, grouping, deferring, reading it back to tidy it, and when to clear.
 ---
 
 # The checklist panel
 
 The human has a panel beside their code showing the shape of the conversation.
-You write to it; they read it. Claude Code's built-in todo display was removed
+You write to it; they read it; now and then you read it back to tidy it (see
+*Maintenance*). Claude Code's built-in todo display was removed
 because it bloated context — this puts the same information *outside* the
 context window, where it costs you one tool call and them no scrolling.
 
@@ -77,19 +78,39 @@ back up is a matter of re-`set`ting it into its real group.
 Keep the `text` self-contained. "Test runner: neotest + adapter" still makes
 sense in a week; "the thing we said we'd do later" does not.
 
-## Write-only
+## Maintenance
 
-**Never read it back, and never report on it.** Do not tell the human what their
-checklist says; they are looking at it. Pulling it mid-conversation would
-reintroduce exactly the context cost that removing the todo display was meant to
-avoid.
+Items arrive one at a time, as the conversation raises them, so over a long
+session the panel drifts: the same thing added twice under two ids, an item
+still `inprogress` after the work moved on, finished items outnumbering live
+ones, groups that made sense an hour ago. Nothing in your context shows the
+drift, because you only ever sent changes.
 
-There is one exception, and it is not yours to make: the `SessionStart` hook
-hands you the panel's contents when a session starts, is cleared, or is
-compacted. That is a single bounded push at the moment the plan would otherwise
-be lost, rather than a habit of reading. When it arrives, treat it as your plan
-and carry on from it — it is what you wrote, coming back to you across the gap.
-Between those moments the panel is still write-only.
+So every now and then, read it back and tidy it:
+
+```json
+{ "action": "checklist" }
+```
+
+It answers with the panel as markdown, each item's id in backticks:
+``- [>] `dns` DNS cutover  — vendor TTL``. Then fix what drifted in **one**
+`checklist_update` call: `drop` duplicates and items that no longer apply,
+correct stale states, `sweep` finished work, regroup or move with `index`.
+
+Read it back:
+
+- when moving to a new strand of work, before adding its items;
+- when you are no longer sure what is on it, or which ids you used;
+- once it has grown by a dozen or so items since you last tidied.
+
+Not every turn, and never to report on it: do not tell the human what their
+checklist says — they are looking at it. A read costs context for every item on
+the panel, which is the cost removing Claude Code's todo display saved.
+
+The `SessionStart` hook also hands you the panel, ids included, when a session
+starts, is cleared, or is compacted. When it arrives, treat it as your plan and
+carry on from it, updating those ids rather than adding the items again — it is
+what you wrote, coming back to you across the gap.
 
 ## Operations
 

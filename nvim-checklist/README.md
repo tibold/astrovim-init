@@ -1,12 +1,15 @@
 # nvim-checklist
 
 A panel that displays a checklist written by an external agent process. The agent pushes
-state; you read it. Nothing round-trips back into the agent's context.
+state; you read it. It comes back into the agent's context only when the agent reads it
+back to tidy it, now and then.
 
 Claude Code's built-in todo display was removed because it bloated context. A file-based
-checklist would put the list back in the context budget the moment the agent re-read it,
-and leave artifacts in the repo. This is an in-memory buffer, write-only from the agent's
-side.
+checklist would put the list back in the context budget every time the agent re-read it,
+and leave artifacts in the repo. This is an in-memory buffer the agent writes to, and
+reads back only for maintenance: items arrive one at a time over a long session, so the
+panel drifts (duplicates, stale `inprogress`, finished work piling up), and tidying it
+means dropping and moving items by id.
 
 ## Status
 
@@ -132,6 +135,10 @@ There is no contract to install. `lua/checklist/mcp.lua` registers a tool with
 [`nvim-mcp`](../nvim-mcp), and the tool's **description is** the contract — Claude
 receives the rules with the tool itself, so they cannot drift apart.
 
+A second action, `checklist`, reads the panel back as markdown with each item's id in
+backticks, for that tidying; the `SessionStart` hook pushes the same, ids included, after
+a clear or a compaction, so the agent updates its items rather than adding them again.
+
 Claude reaches it as `mcp__plugin_nvim_editor__drive (action checklist_update)`. The namespace is load-bearing:
 registering with `claudecode.nvim` instead produces `mcp__ide__checklist_update`, which
 Claude Code drops against a hardcoded two-item allowlist. See the nvim-mcp README.
@@ -154,5 +161,5 @@ nvim --headless -u tests/minimal_init.lua \
   -c "PlenaryBustedDirectory tests/ { minimal_init = 'tests/minimal_init.lua' }"
 ```
 
-75 tests across state, render, window, load, startup, persistence and the MCP tool. The
-suite exits non-zero on failure. `nvim-mcp` carries its own 31.
+102 tests across state, render, window, load, startup, persistence and the MCP tools. The
+suite exits non-zero on failure. `nvim-mcp` carries its own 254.

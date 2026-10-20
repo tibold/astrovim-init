@@ -6,12 +6,12 @@
 --- -- advertises a tool the model can never call.
 local M = {}
 
---- One line. The full contract -- what the panel is for, why it is write-only,
---- what each op means -- lives in the `nvim` skill, which loads on demand
+--- One line. The full contract -- what the panel is for, when to read it back,
+--- what each op means -- lives in the `checklist` skill, which loads on demand
 --- instead of costing permanent context in a tool description.
 M.SUMMARY = "Mirror your working plan into the human's editor checklist panel. "
-  .. "Write-only: never read it back. Batch a turn's changes into one call. "
-  .. "Group items by workstream. Ops: set (upsert by id), drop, clear, sweep."
+  .. "Batch a turn's changes into one call. Group items by workstream. "
+  .. "Ops: set (upsert by id), drop, clear, sweep. Read it back (`checklist`) only to tidy it."
 
 M.tool = {
   name = "checklist_update",
@@ -65,12 +65,28 @@ M.tool = {
   end,
 }
 
+--- The panel read back, ids and all. Items arrive one at a time over a long
+--- session, so the panel drifts -- duplicates, stale `inprogress`, finished
+--- work piling up -- and tidying it means dropping and moving items by id.
+--- Not for reporting it: the human is looking at it.
+M.read_tool = {
+  name = "checklist",
+  description = "The checklist panel as markdown, each item with its id. Only to tidy it now and then "
+    .. "(duplicates, stale items, finished work piling up), never to report it back to the human.",
+  inputSchema = { type = "object", properties = vim.empty_dict() },
+  handler = function()
+    local markdown = require("checklist").read()
+    if markdown == "" then return "The checklist is empty." end
+    return markdown
+  end,
+}
+
 --- Register with the Neovim MCP server if it is installed. Guarded so the
 --- checklist works as a plain panel when nvim-mcp is absent.
 function M.attach()
   local ok, mcp = pcall(require, "nvim-mcp")
   if not ok or type(mcp.register) ~= "function" then return false end
-  return (mcp.register(M.tool))
+  return (mcp.register(M.tool)) and (mcp.register(M.read_tool))
 end
 
 return M

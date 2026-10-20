@@ -40,6 +40,13 @@ function M.apply(payload)
   return true
 end
 
+--- The checklist as markdown with each item's id, for the agent to tidy it by
+--- (checklist.mcp). Restores first, as an update does.
+function M.read()
+  ensure_restored()
+  return window.markdown { ids = true }
+end
+
 --- Decode, validate, apply and render a payload file.
 --- Returns 1 on success, 0 on any failure. Never throws, never reports.
 --- With NVIM_CHECKLIST_DEBUG=1 a failure returns its reason instead of 0.
