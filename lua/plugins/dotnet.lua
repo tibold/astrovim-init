@@ -140,6 +140,11 @@ return {
       if tool then
         config.cmd = { tool, "--stdio", "--daemon-mode", "--clientProcessId", tostring(vim.uv.os_getpid()) }
       end
+      -- On a large solution the server idled at 10 GB with under 5 GB live:
+      -- its Server GC left dead gen2 objects and freed memory committed. This
+      -- lets fragmentation trigger compacting GCs that hand memory back. The
+      -- daemon inherits it, so an already running one keeps the old setting
+      config.cmd_env = { DOTNET_GCConserveMemory = "5" }
       vim.lsp.config("roslyn", config)
     end,
     config = function(_, opts)
