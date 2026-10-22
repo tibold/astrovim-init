@@ -10,6 +10,19 @@ return {
       -- tree and it survives opening files.
       hijack_netrw_behavior = "open_default",
     },
+    buffers = {
+      -- The buffers tab runs a blocking `git status` before every render, even
+      -- with git_status_async on: ~1s in a large .NET repo, most of it git
+      -- walking ignored bin/ and obj/ folders. That freezes the editor on every
+      -- switch to the tab, and on every buffer opened, closed or written while
+      -- it is showing. Setting before_render replaces that call, so this asks
+      -- the way the filesystem tab does, in the background, and the
+      -- git_status_changed handler below repaints once the answer lands.
+      before_render = function(state)
+        local config = require("neo-tree").ensure_config()
+        require("neo-tree.git").status_async(state.path, state.git_base_by_worktree, config.git_status_async_options)
+      end,
+    },
     window = {
       -- AstroNvim's 30 is cramped on a wide screen, and the checklist panel
       -- shares this column, so it pays the same cost. neo-tree accepts a
@@ -35,6 +48,17 @@ return {
             if arg == "--ignored=traditional" then cmd[i] = "--ignored=matching" end
           end
         end,
+      },
+      -- Setting buffers.before_render (above) also drops the tab's own git
+      -- listeners. These two put them back: repaint when the background status
+      -- lands, and refresh after a commit or a Fugitive change.
+      {
+        event = "git_status_changed",
+        handler = function(args) require("neo-tree.sources.manager").git_status_changed("buffers", args) end,
+      },
+      {
+        event = "git_event",
+        handler = function() require("neo-tree.sources.buffers").buffers_changed() end,
       },
     },
   },
