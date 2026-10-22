@@ -35,6 +35,7 @@ describe("edit.apply", function()
     assert.is_true(reply.applied)
     assert.are.same({ "local bar = 1" }, vim.fn.readfile(path))
     assert.are.equal(1, reply.changed[1].edits)
+    assert.is_nil(reply.changed[1].retried)
     local buffer = position.buffer_for(path)
     assert.is_false(vim.bo[buffer].buflisted)
     assert.is_false(vim.bo[buffer].modified)
@@ -92,18 +93,100 @@ describe("edit.apply", function()
     assert.are.same({ "two, edited" }, vim.api.nvim_buf_get_lines(buffer, 0, -1, false))
   end)
 
-  it("saves the rest and reports a file it cannot write", function()
+  it("saves the rest and says the edit was partial when a file cannot be written", function()
     local writable, locked = fake.file { "one" }, fake.file { "two" }
     local buffer = open_listed(locked)
     vim.bo[buffer].readonly = true
+    local started = vim.uv.now()
     local reply = edit.apply(
       { changes = vim.tbl_extend("error", rename_in(writable, 0, 0, 3, "ONE"), rename_in(locked, 0, 0, 3, "TWO")) },
       "utf-16"
     )
-    assert.is_true(reply.applied)
+    assert.are.equal("partial", reply.applied)
     assert.are.same({ "ONE" }, vim.fn.readfile(writable))
+    assert.are.same({ vim.fs.normalize(writable) }, vim.tbl_map(function(c) return c.file end, reply.changed))
     assert.are.equal(1, #reply.failed)
     assert.are.equal(vim.fs.normalize(locked), vim.fs.normalize(reply.failed[1].file))
+    assert.are.equal(1, reply.failed[1].edits)
+    assert.is_true(vim.bo[buffer].modified)
+    -- Only a write the OS refused for a moment is tried again; E45 is final.
+    assert.is_true(vim.uv.now() - started < 500)
+  end)
+end)
+
+-- A read-only view of `path` with no file handle left open: what git leaves
+-- while it hashes a file over 32 KiB, and what a virus scanner leaves. Windows
+-- refuses to truncate a file while such a view exists. Returns the release.
+local function map_view(path)
+  local ffi = require "ffi"
+  pcall(
+    ffi.cdef,
+    [[
+    int MultiByteToWideChar(uint32_t, uint32_t, const char*, int, uint16_t*, int);
+    void* CreateFileW(const uint16_t*, uint32_t, uint32_t, void*, uint32_t, uint32_t, void*);
+    void* CreateFileMappingW(void*, void*, uint32_t, uint32_t, uint32_t, const uint16_t*);
+    void* MapViewOfFile(void*, uint32_t, uint32_t, uint32_t, size_t);
+    int UnmapViewOfFile(const void*);
+    int CloseHandle(void*);
+  ]]
+  )
+  local k = ffi.C
+  local wide = ffi.new("uint16_t[?]", #path + 1)
+  k.MultiByteToWideChar(65001, 0, path, -1, wide, #path + 1)
+  local file = k.CreateFileW(wide, 0x80000000, 7, nil, 3, 0x80, nil)
+  assert(ffi.cast("intptr_t", file) ~= -1, "could not open " .. path)
+  local mapping = k.CreateFileMappingW(file, nil, 2, 0, 0, nil)
+  local view = k.MapViewOfFile(mapping, 4, 0, 0, 0)
+  k.CloseHandle(mapping)
+  k.CloseHandle(file)
+  assert(view ~= nil, "could not map " .. path)
+  local released = false
+  return function()
+    if not released then k.UnmapViewOfFile(view) end
+    released = true
+  end
+end
+
+describe("edit.apply while another process maps the file", function()
+  local windows = vim.fn.has "win32" == 1
+  local writebackup
+
+  -- With 'writebackup' Neovim moves the file aside instead of truncating it,
+  -- which a mapped view does not stop; this config turns it off.
+  before_each(function()
+    writebackup = vim.o.writebackup
+    vim.o.writebackup = false
+  end)
+  after_each(function() vim.o.writebackup = writebackup end)
+
+  it("saves once the view is gone", function()
+    if not windows then return end
+    local path = fake.file { "local foo = 1" }
+    open_listed(path)
+    local release = map_view(path)
+    assert.is_nil(io.open(path, "w"), "the view should stop a truncating write")
+    vim.defer_fn(release, 150)
+    local reply = edit.apply({ changes = rename_in(path, 0, 6, 9, "bar") }, "utf-16")
+    release()
+    assert.is_true(reply.applied)
+    assert.is_nil(reply.failed)
+    assert.is_true(reply.changed[1].retried >= 1)
+    assert.are.same({ "local bar = 1" }, vim.fn.readfile(path))
+  end)
+
+  it("says the edit was partial when the view outlasts the retries, and keeps it in the buffer", function()
+    if not windows then return end
+    local path = fake.file { "local foo = 1" }
+    local buffer = open_listed(path)
+    local release = map_view(path)
+    local reply = edit.apply({ changes = rename_in(path, 0, 6, 9, "bar") }, "utf-16")
+    release()
+    assert.are.equal("partial", reply.applied)
+    assert.are.same({}, reply.changed)
+    assert.matches("E212", reply.failed[1].error)
+    assert.are.equal(#edit.retry_ms, reply.failed[1].retried)
+    assert.are.same({ "local foo = 1" }, vim.fn.readfile(path))
+    assert.are.same({ "local bar = 1" }, vim.api.nvim_buf_get_lines(buffer, 0, -1, false))
   end)
 
   it("leaves a buffer it opened listed when its save was refused, so the edit can be found", function()
@@ -189,6 +272,18 @@ describe("edit.capturing", function()
     end)
     assert.is_false(answer.applied)
     assert.matches("Unsaved changes", answer.failureReason)
+  end)
+
+  it("answers applied = true when the edit landed but a file could not be saved", function()
+    local path = fake.file { "abc" }
+    local buffer = open_listed(path)
+    vim.bo[buffer].readonly = true
+    local answer
+    local _, results = edit.capturing("utf-16", function()
+      answer = vim.lsp.handlers["workspace/applyEdit"](nil, { edit = { changes = rename_in(path, 0, 0, 3, "xyz") } }, { client_id = -1 })
+    end)
+    assert.are.same({ applied = true }, answer)
+    assert.are.equal("partial", results[1].applied)
   end)
 
   it("restores the handler when the work throws", function()

@@ -19,6 +19,25 @@ function M.buffer_for(path)
   end
 end
 
+--- Create the buffers core LSP code is about to, natively named. Applying an
+--- edit or listing locations makes a buffer for each file, named as the server
+--- spells its uri -- d:\... from file:///d%3A/... -- beside the D:\... the
+--- rest of the editor uses. One that already exists is found however it is
+--- spelled, so creating it first is enough.
+function M.name_natively(files)
+  -- References can span hundreds of files: index the buffers once.
+  local have = {}
+  for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(buffer)
+    if name ~= "" then have[vim.fs.normalize(name):lower()] = true end
+  end
+  for _, file in ipairs(files) do
+    local key = vim.fs.normalize(file):lower()
+    if not have[key] and vim.uv.fs_stat(file) then vim.fn.bufadd(require("nvim-mcp.path").native(file)) end
+    have[key] = true
+  end
+end
+
 --- Reload an unmodified buffer whose file changed on disk; true when it did.
 --- Claude's own Edit tool writes files behind the editor's back: without this
 --- a lookup reads stale text, and saving an edit hits Vim's "file has changed"

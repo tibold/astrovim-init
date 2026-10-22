@@ -27,6 +27,25 @@ describe("native paths", function()
     if windows then assert.is_nil(native:find("/", 1, true)) end
   end)
 
+  it("spells the drive in capitals, as the editor's own buffers do", function()
+    if not windows then return end
+    local file = forward_file "drive.txt"
+    local lower = file:gsub("^%a", string.lower)
+    assert.matches("^%u:\\", path.native(lower))
+  end)
+
+  it("names the buffers an edit opens natively, however the server spelled the uri", function()
+    if not windows then return end
+    -- Roslyn and marksman send file:///d%3A/...: uri_to_fname makes that d:\...
+    local file = forward_file "renamed.txt"
+    local uri = vim.uri_from_fname(file):gsub("^file:///(%a):", function(drive) return "file:///" .. drive:lower() .. "%3A" end)
+    local range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 1 } }
+    require("nvim-mcp.lsp.edit").apply({ changes = { [uri] = { { range = range, newText = "y" } } } }, "utf-16")
+    local name = vim.api.nvim_buf_get_name(position.buffer_for(file))
+    assert.matches("^%u:\\", name)
+    assert.is_nil(name:find("/", 1, true))
+  end)
+
   it("names the buffers show opens natively", function()
     local file = forward_file "shown.txt"
     local reply = actions.show { path = file }

@@ -156,7 +156,7 @@ describe("code action commands that go wrong", function()
     )
     vim.bo[buffer].readonly = true
     local reply = lsp.code_action { path = path, line = 1, title = "Fill it" }
-    assert.is_true(reply.applied, vim.inspect(reply))
+    assert.are.equal("partial", reply.applied, vim.inspect(reply))
     assert.are.equal(1, #(reply.failed or {}), vim.inspect(reply))
     assert.matches("^E45:", reply.failed[1].error)
     assert.are.same({ "local foo = 1", "print(foo)" }, vim.fn.readfile(path))

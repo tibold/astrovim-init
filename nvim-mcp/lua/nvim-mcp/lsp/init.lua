@@ -50,6 +50,12 @@ function M.label(verb, at) return ("Claude · LSP %s %s (%s)…"):format(verb, a
 function M.locations(result, encoding)
   if result == nil then return {} end
   if result.uri or result.targetUri then result = { result } end
+  local files = {}
+  for _, location in ipairs(result) do
+    local uri = location.uri or location.targetUri
+    if uri then files[#files + 1] = vim.uri_to_fname(uri) end
+  end
+  position.name_natively(files)
   local out = {}
   for _, item in ipairs(vim.lsp.util.locations_to_items(result, encoding)) do
     local text = item.text or ""

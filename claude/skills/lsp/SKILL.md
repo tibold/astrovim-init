@@ -107,15 +107,22 @@ Other replies to recognise:
 - **`reason: "changed on disk"`** with `files` — a file changed while the
   server was computing the edit (on disk, or edited and saved by something
   else), so nothing was applied. Call again.
-- **`failed: [{ file, error }]`** beside `applied: true` — the edit is in those
-  buffers but they were not saved, because saving would have asked the human
-  (a readonly buffer, say, or a file changed since the edit began). They stay
-  in the human's buffer list. Tell them which files are left unsaved and why.
 - **`reason: "client command"`** — the action runs inside the editor (a picker,
   say) and was not run. Ask the human to apply it themselves.
 - **`applied: "partial"`** with `error` — applying failed partway (a buffer
   that is not modifiable, a file that could not be renamed). What landed is
   saved and listed in `changed`; tell the human the rest did not.
+- **`applied: "partial"`** with `failed: [{ file, edits, error }]` — the edit
+  landed in those buffers but saving them failed, so the files on disk do not
+  have it yet: saving would have asked the human (a readonly buffer, say, or a
+  file changed since the edit began), or the OS refused it. A save the OS
+  refuses for a moment (E212 while another process maps the file) has already
+  been retried for over a second. They stay in the human's buffer list. Do not
+  read those files back as if changed; tell the human which are unsaved in the
+  editor, and why.
+- **`retried: n`** on an entry in `changed` or `failed` — its save was refused
+  and tried again n times. Saved in the end means nothing is wrong, but
+  mention it: something held the file open at that moment.
 - **`server_error`** beside `changed` — the server failed its command after
   edits had already landed. The files listed did change.
 

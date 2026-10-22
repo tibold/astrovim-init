@@ -86,6 +86,33 @@ local function apply_changes(workspace_edit, encoding, before)
   end
 end
 
+--- Waits before each retry of a save, in milliseconds.
+---
+--- While another process holds a memory-mapped view of a file -- git hashing
+--- one over 32 KiB, a virus scanner -- Windows refuses to truncate it, and
+--- Neovim reports E212 with "unknown error". The view goes away by itself, so
+--- the save is tried again for a moment before it counts as failed.
+M.retry_ms = { 50, 100, 200, 400, 800 }
+
+--- disk.write, retried while it fails with E212: whether the save worked,
+--- why not, and how many retries it took. The reply carries that count, so
+--- the moment something holds a file stays visible and its holder can be
+--- caught.
+local function save(buffer, before)
+  local ok, why, retries = false, nil, 0
+  for attempt = 0, #M.retry_ms do
+    if attempt > 0 then
+      vim.wait(M.retry_ms[attempt])
+      retries = attempt
+    end
+    -- A plain :write, so the human's format-on-save and friends still run;
+    -- one that would ask is not made, and is reported instead.
+    ok, why = disk.write(buffer, before)
+    if ok or not tostring(why):find("E212", 1, true) then break end
+  end
+  return ok, why, retries
+end
+
 function M.apply(workspace_edit, encoding)
   local files = M.files(workspace_edit)
   -- During an edit action every buffer was made current with disk before the
@@ -141,32 +168,39 @@ function M.apply(workspace_edit, encoding)
     was_listed[file] = buffer ~= nil and vim.bo[buffer].buflisted
   end
 
+  local counts = edit_counts(workspace_edit)
+  position.name_natively(vim.tbl_filter(function(file) return counts[file] ~= nil end, files))
+
   -- Applying can fail partway -- a buffer that is not modifiable, a file that
   -- cannot be renamed -- after earlier files were already edited. Those are
   -- still saved and reported, and the reply says the edit was partial, rather
-  -- than an error suggesting nothing happened. Files it opens are opened
-  -- without a question about a swap file (disk.unasked).
+  -- than an error suggesting nothing happened. So does a file that landed in
+  -- its buffer but could not be saved: `changed` lists only what is on disk.
+  -- Files it opens are opened without a question about a swap file
+  -- (disk.unasked).
   local whole, err = disk.unasked(apply_changes, workspace_edit, encoding, before)
 
-  local counts, changed, failed, saved = edit_counts(workspace_edit), {}, {}, {}
+  local changed, failed, saved = {}, {}, {}
   for _, file in ipairs(files) do
     local buffer = position.buffer_for(file)
-    local landed = whole
+    local landed, written, retried = whole, true, nil
     if buffer and vim.api.nvim_buf_is_loaded(buffer) then
       if vim.bo[buffer].modified then
         landed = true
-        -- A plain :write, so the human's format-on-save and friends still
-        -- run; one that would ask is not made, and is reported instead.
-        local written, why = disk.write(buffer, before[file])
-        if not written then failed[#failed + 1] = { file = file, error = why } end
+        local why, retries
+        written, why, retries = save(buffer, before[file])
+        retried = retries > 0 and retries or nil
+        if not written then
+          failed[#failed + 1] = { file = file, edits = counts[file] or 0, error = why, retried = retried }
+        end
       end
       saved[file] = landed and not vim.bo[buffer].modified
       if not was_listed[file] and not vim.bo[buffer].modified then vim.bo[buffer].buflisted = false end
       -- The server hears of this change, and computes its next edit from it.
       disk.settle(buffer)
     end
-    if landed and (counts[file] or vim.uv.fs_stat(file)) then
-      changed[#changed + 1] = { file = file, edits = counts[file] or 0 }
+    if landed and written and (counts[file] or vim.uv.fs_stat(file)) then
+      changed[#changed + 1] = { file = file, edits = counts[file] or 0, retried = retried }
     end
   end
 
@@ -178,7 +212,7 @@ function M.apply(workspace_edit, encoding)
     end
   end
 
-  local reply = { applied = whole or "partial", changed = changed }
+  local reply = { applied = whole and #failed == 0 or "partial", changed = changed }
   if not whole then reply.error = tostring(err) end
   if #failed > 0 then reply.failed = failed end
   if #deleted > 0 then reply.deleted_swaps = deleted end
@@ -195,7 +229,9 @@ function M.capturing(encoding, fn)
     local client = ctx and vim.lsp.get_client_by_id(ctx.client_id)
     local result = M.apply(params.edit, client and client.offset_encoding or encoding)
     results[#results + 1] = result
-    if result.applied == true then return { applied = true } end
+    -- A file that landed but did not save still holds the edit in its buffer,
+    -- which is what the server syncs from: applied, as far as it can tell.
+    if result.applied == true or (result.applied == "partial" and not result.error) then return { applied = true } end
     if result.reason == "modified" then
       return { applied = false, failureReason = "Unsaved changes in " .. table.concat(result.files, ", ") }
     end

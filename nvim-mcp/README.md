@@ -297,9 +297,10 @@ neotest's async client.
   has saved its file (`deleted_swaps`). No action asks about a swap file when
   it opens a file. A code action's reply carries what every edit it applied
   reports — `changed`, `failed`, `deleted_swaps` — including the edits before
-  one that was refused. Buffers an edit had to open are
-  unlisted again once saved; one left unsaved stays listed, where the human can
-  find it. Edits a server sends back while running a command
+  one that was refused. Buffers an edit had to open are named natively
+  (capital drive, whatever the server's uri said) and unlisted again once
+  saved; one left unsaved stays listed, where the human can find it. Edits a
+  server sends back while running a command
   (`workspace/applyEdit`) are captured and follow the same rules. A file the
   edit itself creates over an existing one is read again before its text edits
   land.
@@ -318,7 +319,10 @@ neotest's async client.
 - **Saving never asks.** `'confirm'` is off while an edit writes, so a refusal
   (a readonly buffer, a file that appeared) is an error, and a file changed
   since the edit began is not overwritten; either way the file is listed in
-  `failed`, its buffer holding the edit unsaved.
+  `failed`, its buffer holding the edit unsaved, and the reply is
+  `applied: "partial"`. A save Windows refuses with E212 while another process
+  has the file memory-mapped (git hashing a file over 32 KiB, a scanner) is
+  retried for about 1.5 seconds first.
 
 Design: `../docs/superpowers/specs/2026-09-27-lsp-actions-design.md`.
 
@@ -330,7 +334,7 @@ nvim --headless -u tests/minimal_init.lua \
   -c "PlenaryBustedDirectory tests/ { minimal_init = 'tests/minimal_init.lua' }"
 ```
 
-254 tests covering registration, validation, ordering, invocation, hidden actions,
+260 tests covering registration, validation, ordering, invocation, hidden actions,
 the tool each action is on, readiness, quickfix, neotest results, debugging, search, the ported editor actions, config generation, and the LSP actions against
 an in-process fake language server (`tests/fake_lsp.lua`), and the bridge driven
 over real JSON-RPC (`tests/bridge_spec.lua`).

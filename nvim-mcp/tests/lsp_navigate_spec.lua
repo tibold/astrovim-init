@@ -75,6 +75,19 @@ describe("navigation", function()
     assert.is_nil(full.truncated)
   end)
 
+  it("names the buffers a lookup creates natively, however the server spelled the uri", function()
+    if vim.fn.has "win32" == 0 then return end
+    -- Roslyn sends file:///d%3A/...; core LSP code would name the buffer d:\...
+    local other = fake.file({ "foo()" }, "other.txt")
+    local lower = vim.uri_from_fname(other):gsub("^file:///(%a):", function(drive) return "file:///" .. drive:lower() .. "%3A" end)
+    local path = server(function()
+      return { ["textDocument/references"] = function() return { { uri = lower, range = fake.range(0, 0, 3) } } end }
+    end)
+    lsp.references({ path = path, line = 1, symbol = "foo" }, {})
+    local name = vim.api.nvim_buf_get_name(position.buffer_for(other))
+    assert.matches("^%u:\\", name)
+  end)
+
   it("reads hover contents as markdown", function()
     local path = server(function()
       return {
