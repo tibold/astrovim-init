@@ -231,4 +231,17 @@ return {
       wait_for_html_without_blocking()
     end,
   },
+  -- nvim-dotnet only: its solution explorer, as a neo-tree tab. A function,
+  -- since a list in a table replaces AstroNvim's (and its tabs' labels); the
+  -- dependency puts nvim-dotnet on the runtime path before neo-tree loads its
+  -- sources. Last in the list, since it is nil with roslyn.nvim.
+  use_nvim_dotnet and {
+    "nvim-neo-tree/neo-tree.nvim",
+    dependencies = { "ArchPillar/nvim-dotnet" },
+    opts = function(_, opts)
+      table.insert(opts.sources, "ap_dotnet.explorer.neo_tree")
+      -- No display_name: the tab names what is loaded (sln, slnx, csproj...)
+      table.insert(opts.source_selector.sources, { source = "solution" })
+    end,
+  } or nil,
 }

@@ -2,6 +2,7 @@
 return {
   "nvim-neo-tree/neo-tree.nvim",
   opts = {
+    -- The solution explorer's tab is added in dotnet.lua, with nvim-dotnet
     filesystem = {
       -- AstroNvim defaults to "open_current", which opens the tree *inside* the
       -- window you launched from. `nvim .` then loses the tree the moment you
