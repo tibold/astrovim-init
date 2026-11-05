@@ -4,9 +4,9 @@
 -- minute (idle_prompt), when a permission decision has waited a few seconds
 -- (permission_prompt), and when it asks a question or needs input. hooks.json
 -- routes those here, and this turns each into a desktop notification plus a
--- bell: the terminal shows the notification (Rio sends OSC 777 to the system's
--- notification centre) and marks the tab that rang, when it is not the one in
--- front.
+-- bell: the terminal shows the notification (Pylon shows OSC 777 itself while
+-- its window has focus, and as the system's notification while it does not)
+-- and marks the tab that rang, when it is not the one in front.
 --
 -- Always sent, not only when the terminal is out of focus. The only focus a
 -- program in a terminal can learn is the window's, reported to whichever tab
@@ -57,7 +57,8 @@ if not ok or type(event) ~= "table" then os.exit(0) end
 local note = describe(event)
 if not note then os.exit(0) end
 
--- OSC 777 for the notification, then a bell of its own for the tab mark.
+-- OSC 777 for the notification, which marks the tab, then a bell of its own for
+-- Pylon's sound and, while its window has no focus, the taskbar flash.
 local sequence = ("%s]777;notify;%s;%s%s%s"):format(ESC, field(note.title), field(note.body), BEL, BEL)
 
 if vim.env.NVIM and vim.env.NVIM ~= "" then

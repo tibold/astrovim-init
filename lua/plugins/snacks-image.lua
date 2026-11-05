@@ -1,33 +1,34 @@
 -- lua/plugins/snacks-image.lua
 --
 -- snacks.image only draws in terminals on its own list (kitty, ghostty,
--- wezterm) and has no option to add one, so Rio -- which speaks the Kitty
+-- wezterm) and has no option to add one, so Pylon -- which speaks the Kitty
 -- graphics protocol -- is appended to that list here. terminal.envs() returns
 -- the list itself, not a copy, and snacks reads it lazily the first time an
 -- image is shown, so adding to it while snacks loads is enough. opts rather
 -- than init, which runs before snacks is on the runtimepath.
 --
--- Matched by TERM_PROGRAM, which Rio sets, as well as by its XTVERSION reply:
+-- Matched by TERM_PROGRAM, which Pylon sets, as well as by its XTVERSION reply:
 -- that reply cannot be relied on to arrive in time on Windows, where the
 -- query goes out through ConPTY.
 --
--- With Unicode placeholders, which Rio implements: the image is drawn in text
+-- With Unicode placeholders, which Pylon implements: the image is drawn in text
 -- cells nvim owns, so it goes away with the buffer. Without them snacks places
 -- it at a screen position and never takes it down when another buffer is
 -- shown in the window -- the next image lands on top of the last. WezTerm
 -- has no placeholders, so it keeps that problem.
---
--- On Windows, images only get through ConPTY 1.22 and later. Rio's installer
--- does not ship it, so conpty.dll and OpenConsole.exe from the
--- Microsoft.Windows.Console.ConPTY NuGet package have to sit next to rio.exe.
 
 -- snacks sizes images from the terminal's cell size in pixels, which it asks
 -- the tty for with an ioctl that Windows does not have. It then assumes 9x18
 -- cells and a 9/8 display scale, so images come out the wrong size and the
 -- terminal rescales them, blurring them. Measured instead from the window
 -- that has focus -- the terminal nvim is in, whenever an image is being
--- opened -- divided by the grid nvim draws on it. Padding and a tab bar make
--- it a slight overestimate, which is harmless next to the guess.
+-- opened -- divided by the grid nvim draws on it.
+--
+-- Only an estimate, because the whole window counts as grid: Pylon's tab panel
+-- and toolbar make a full window read 9.4x18.8 for an 8x18 cell, and images
+-- come out about 15% small and a little soft. A split, or a window without the
+-- focus, is further off. Pylon reports the real size to CSI 16 t, but nvim
+-- passes only OSC, DCS and APC replies on to TermResponse, not CSI ones.
 local function measure_windows_cells(terminal)
   local ffi = require "ffi"
   pcall(
@@ -71,11 +72,11 @@ return {
     local terminal = require "snacks.image.terminal"
 
     local envs = terminal.envs()
-    if not vim.iter(envs):any(function(e) return e.name == "rio" end) then
+    if not vim.iter(envs):any(function(e) return e.name == "pylon" end) then
       table.insert(envs, {
-        name = "rio",
-        terminal = "rio",
-        env = { TERM_PROGRAM = "rio" },
+        name = "pylon",
+        terminal = "pylon",
+        env = { TERM_PROGRAM = "pylon" },
         supported = true,
         placeholders = true,
       })
@@ -85,6 +86,24 @@ return {
       terminal.__measured = true
       measure_windows_cells(terminal)
     end
+
+    -- snacks hides a placement once its buffer has left every window, and
+    -- only shows inline ones again: coming back to an image file found an
+    -- empty buffer, under the stale "loading" text. update is what snacks
+    -- calls on BufWinEnter, so it is shown again there. Inline placements
+    -- stay with snacks, which hides them on purpose under the cursor.
+    -- Scheduled because that module reads the Snacks global as it loads, and
+    -- setup, which defines it, runs after opts.
+    vim.schedule(function()
+      local placement = require("snacks").image.placement
+      if placement.__reshown then return end
+      placement.__reshown = true
+      local update = placement.update
+      placement.update = function(self)
+        if self.hidden and not self.opts.inline and #self:wins() > 0 then self.hidden = false end
+        update(self)
+      end
+    end)
 
     -- snacks scales an image by the DPI stored in the file, and ImageMagick
     -- reports 72 -- the old Mac screen's -- for the many files that store
