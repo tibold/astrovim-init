@@ -120,16 +120,5 @@ return {
     -- Lets Claude read the last run through nvim-mcp's `tests` action. neotest
     -- has no other way to read results than a consumer it hands its client to.
     opts.consumers = vim.tbl_extend("force", opts.consumers or {}, { nvim_mcp = require("nvim-mcp.neotest").consumer })
-
-    -- The python pack's `base` spec is reached through more than one import,
-    -- so its neotest opts function runs twice and registers neotest-python
-    -- twice, which makes every python test show up (and run) twice. Keep the
-    -- first adapter of each name.
-    local seen = {}
-    opts.adapters = vim.tbl_filter(function(adapter)
-      if seen[adapter.name] then return false end
-      seen[adapter.name] = true
-      return true
-    end, opts.adapters or {})
   end,
 }

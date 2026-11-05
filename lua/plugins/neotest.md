@@ -22,13 +22,6 @@ Workarounds live in `neotest.lua`. Found on Windows; not reported upstream.
 - **Workaround:** the child gets one OS pipe for both stdout and stderr, as a
   terminal gives it one stream.
 
-## neotest-python registered twice
-
-- **Symptom:** every Python test shows, and runs, twice.
-- **Cause:** astrocommunity's python pack is reached through more than one
-  import, so its neotest opts run twice.
-- **Workaround:** keep the first adapter of each name.
-
 ## Projects nested in the editor's directory
 
 Not a bug to work around, but a limit: neotest finds adapters and roots from the

@@ -1,7 +1,7 @@
 -- lua/plugins/python.lua
 --
--- Local additions on top of `astrocommunity.pack.python` (imported in
--- community.lua).
+-- Local additions on top of the `astrocommunity.pack.python` subpacks
+-- imported in community.lua.
 return {
   {
     "mfussenegger/nvim-dap-python",

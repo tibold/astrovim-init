@@ -9,7 +9,14 @@ return {
   -- import/override with your plugins folder
   { import = "astrocommunity.pack.typescript-all-in-one" },
   { import = "astrocommunity.pack.html-css" },
-  { import = "astrocommunity.pack.python" },
+  -- The python pack is a folder of subpacks, and importing the folder loads
+  -- every one of them (lazy.nvim imports each module in it, not just
+  -- init.lua): three type checkers at once, black and isort beside ruff, and
+  -- `base` twice. Name the subpacks instead. Ruff lints, formats and sorts
+  -- imports, so black and isort are left out.
+  { import = "astrocommunity.pack.python.base" },
+  { import = "astrocommunity.pack.python.basedpyright" },
+  { import = "astrocommunity.pack.python.ruff" },
   { import = "astrocommunity.pack.bash" },
   { import = "astrocommunity.pack.json" },
   { import = "astrocommunity.pack.yaml" },
